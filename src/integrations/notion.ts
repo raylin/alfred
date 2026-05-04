@@ -293,3 +293,68 @@ export async function searchPlaces(
   )
   return res.results.map(notionPageToPlace)
 }
+
+// --- DB discovery (ADR-019) ---
+
+export type DbIds = {
+  places: string
+  visits: string
+  settings: string
+}
+
+const DB_NAMES: Record<keyof DbIds, string> = {
+  places: 'Alfred — 親子景點',
+  visits: 'Visits',
+  settings: 'Settings',
+}
+
+const DB_IDS_KV_KEY = 'system:db_ids'
+const DB_IDS_TTL_SECONDS = 86400  // 24h
+
+type BlocksPage = {
+  results: Array<{ type: string; id: string; child_database?: { title: string } }>
+  has_more: boolean
+  next_cursor: string | null
+}
+
+/**
+ * Returns the Notion DB IDs for Places, Visits, and Settings.
+ * Checks KV cache first (TTL 24h); on miss, scans NOTION_PARENT_PAGE_ID block children.
+ * Throws if any expected DB is not found under the parent page.
+ */
+export async function discoverDbIds(env: Env): Promise<DbIds> {
+  const cached = await env.ALFRED_KV.get(DB_IDS_KV_KEY)
+  if (cached) return JSON.parse(cached) as DbIds
+
+  const found: Partial<DbIds> = {}
+  let cursor: string | undefined
+
+  do {
+    const url = `${NOTION_API}/blocks/${env.NOTION_PARENT_PAGE_ID}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ''}`
+    const res = await fetch(url, { headers: headers(env.NOTION_TOKEN) })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`discoverDbIds: blocks.children failed (${res.status}): ${text}`)
+    }
+    const page = await res.json() as BlocksPage
+    for (const block of page.results) {
+      if (block.type !== 'child_database' || !block.child_database) continue
+      const title = block.child_database.title
+      for (const key of Object.keys(DB_NAMES) as Array<keyof DbIds>) {
+        if (title === DB_NAMES[key]) found[key] = block.id
+      }
+    }
+    cursor = page.has_more && page.next_cursor ? page.next_cursor : undefined
+  } while (cursor)
+
+  const missing = (Object.keys(DB_NAMES) as Array<keyof DbIds>).filter(k => !found[k])
+  if (missing.length > 0) {
+    throw new Error(`discoverDbIds: DB(s) not found under parent page: ${missing.join(', ')}`)
+  }
+
+  const ids = found as DbIds
+  await env.ALFRED_KV.put(DB_IDS_KV_KEY, JSON.stringify(ids), {
+    expirationTtl: DB_IDS_TTL_SECONDS,
+  })
+  return ids
+}

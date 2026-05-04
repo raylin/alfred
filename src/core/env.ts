@@ -3,6 +3,7 @@ export type Env = {
   LINE_CHANNEL_ACCESS_TOKEN: string;
   NOTION_TOKEN: string;
   NOTION_DB_ID: string;
+  NOTION_PARENT_PAGE_ID: string;  // for DB discovery (ADR-019)
   GOOGLE_PLACES_API_KEY: string;
   ANTHROPIC_API_KEY: string;
   ALFRED_KV: KVNamespace;

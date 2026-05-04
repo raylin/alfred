@@ -448,3 +448,28 @@ The spec (§3.3) says the Migrations DB should live under "Alfred — 設定" pa
 ### Consequences
 - The Migrations DB sits alongside the Place DB under one parent page — simpler mental model.
 - If Phase 5 requires multi-Notion-workspace, the assumption of a single parent page will need revisiting.
+
+---
+
+## ADR-019 — DB ID discovery via Notion parent-page scan + KV cache (Option B)
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task M2
+
+### Context
+Phase 1.5 adds two new Notion DBs (Visits, Settings) whose IDs are created at migration time rather than known in advance. The question is how the Workers runtime learns these IDs. Option A: user runs `wrangler secret put NOTION_VISITS_DB_ID` and `NOTION_SETTINGS_DB_ID` after migration (consistent with existing `NOTION_DB_ID` precedent, but requires two manual steps per new DB). Option B: on cold start (KV miss), scan `NOTION_PARENT_PAGE_ID` block children to find all child databases by title, cache the map in KV with 24h TTL.
+
+### Decision
+Implement Option B (`discoverDbIds` in `src/integrations/notion.ts`). The function checks `ALFRED_KV.get('system:db_ids')` first; on miss, scans the Notion parent page, identifies the three databases by their human-readable titles, and writes the result to KV with `expirationTtl: 86400`. Returns `{ places, visits, settings }` DB ID map. `NOTION_PARENT_PAGE_ID` is added to the `Env` type and must be stored as a Cloudflare secret.
+
+### Alternatives considered
+- Option A (manual secrets): zero runtime complexity, but every new DB requires human action. Phase 1.5 adds 2 DBs; future phases may add more.
+- Store in a Notion page property: too bespoke, extra Notion API call, no KV caching.
+- Hard-code IDs in `wrangler.toml`: IDs change if DBs are recreated; not secret-safe.
+
+### Consequences
+- One extra KV `get` per cold start (< 1ms); on miss, one paginated Notion API call. Negligible at family scale.
+- DB titles must remain stable (renaming "Visits" would break discovery until KV TTL expires). This is acceptable — titles are internal names, not user-facing.
+- `NOTION_PARENT_PAGE_ID` must now be set as a Cloudflare secret before deploying Phase 1.5 features. Added to `src/core/env.ts`. Action required: `npx wrangler secret put NOTION_PARENT_PAGE_ID`.
+- Future: Task 18+ will wire `discoverDbIds` into the request path when Visits/Settings DBs are first needed.

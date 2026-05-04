@@ -1,3 +1,11 @@
+## 2026-05-04 — Task M2 complete: Visits + Settings DBs created
+
+`scripts/migrations/002-create-visits-db.ts` (7 properties, Place relation to Place DB) and `003-create-settings-db.ts` (6 properties) created via `ensureDatabase` helper. `src/lib/visit-title.ts` adds `formatVisitTitle`. `src/integrations/notion.ts` gains `discoverDbIds` (KV cache + Notion parent-page scan, ADR-019). `src/core/env.ts` adds `NOTION_PARENT_PAGE_ID`. 8 new tests (254 total). All 6 acceptance tests passed live. Notion: Visits + Settings DBs visible with correct schemas; Place relation verified. `scripts/verify-db-discovery.ts` confirms all 3 DBs discoverable. Migration phase complete; next: Task 18 (Home Setup).
+
+## 2026-05-04 — Task M1 complete: 001-add-visit-summary-fields migration
+
+`scripts/migrations/_helpers.ts` added (shared helpers: `notionHeaders`, `getDatabase`, `addPropertiesIfMissing`, `findChildDatabase`, `createDatabase`, `ensureDatabase` — all raw fetch, Notion API 2022-06-28). `scripts/migrations/001-add-visit-summary-fields.ts` adds Last Visited / Visit Count / Avg Rating to Place DB. Idempotent: reads schema once, batches missing properties in one PATCH, skips existing ones. All 4 acceptance tests passed live against Notion. 246 tests pass. Awaiting user acceptance.
+
 ## 2026-05-04 — Task M0 complete: Migration Runner Infrastructure
 
 `scripts/migrations/_types.ts` (ScriptEnv + Migration interface) and `scripts/migrations/_runner.ts` built. Runner finds or auto-creates a `Migrations` DB under `NOTION_PARENT_PAGE_ID`, reads applied migration IDs via raw fetch (Notion API 2022-06-28, ADR-017), then runs pending migrations sequentially and records each in the DB. Supports `--dry-run` and `--only <id>` CLI flags. Migrations DB placed under NOTION_PARENT_PAGE_ID (ADR-018). `npx tsx scripts/migrations/_runner.ts --dry-run` connects, finds the DB, and reports 0 pending. README updated with migration instructions. 246 tests pass. Awaiting user acceptance.
