@@ -54,3 +54,27 @@ Note: Notion API version 2025-09-03 (used by `@notionhq/client` v5.x) requires p
 - Adds `@notionhq/client`, `dotenv`, `tsx`, `@types/node` as devDependencies (Node.js only; Worker runtime uses raw fetch for Notion).
 - Views (§4.2) still require manual creation — Notion API does not support view management.
 - `scripts/tsconfig.json` overrides Workers types with Node types, scoped to the `scripts/` directory.
+
+---
+
+## ADR-003 — Use standard vitest node environment instead of Cloudflare Workers pool
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 3
+
+### Context
+`@cloudflare/vitest-pool-workers@0.15.2` (required for its security advisory fix over 0.8.x) declares `vitest@^4.1.0` as a peer dependency. The project targets `vitest@^3.1.0`. Running tests with the custom pool at v3 produces "must export a function as default export" — a hard crash before any test executes. Task 3's unit tests are pure mappers with no Workers runtime APIs.
+
+### Decision
+Remove the custom pool from `vitest.config.ts` and use `environment: 'node'` (vitest's built-in default). Drop `@cloudflare/vitest-pool-workers` from test config entirely for now.
+
+### Alternatives considered
+- Upgrade vitest to v4 — would require auditing all peer deps; risky mid-task churn.
+- Downgrade pool workers to an older version — older versions had a security advisory (OS command injection in `wrangler pages deploy`).
+- Pin `@cloudflare/vitest-pool-workers` but configure it only for Workers-specific test files — viable, but no Workers-API tests exist yet; premature complexity.
+
+### Consequences
+- All current tests run cleanly under Node.js environment (pure unit tests, no Workers APIs).
+- Future tests that require Workers runtime (e.g., testing `crypto.subtle` or `KVNamespace`) will need the pool re-added — requires upgrading vitest to v4 at that point.
+- `@cloudflare/vitest-pool-workers` remains in `package.json` as a devDependency but is not used in config.

@@ -1,3 +1,7 @@
+## 2026-05-04 16:10 — Task 3 complete: Notion integration built and tested
+
+Place schema (`src/capabilities/places/schema.ts`) and Notion CRUD module (`src/integrations/notion.ts`) written. 18 unit tests pass. Live integration test confirmed page creation in Notion DB. Vitest switched from `@cloudflare/vitest-pool-workers` (requires v4, incompatible) to `environment:node` (ADR-003). Awaiting user acceptance before commit.
+
 ## 2026-05-04 15:45 — Notion DB created; NOTION_DB_ID + NOTION_TOKEN stored
 
 Script ran successfully. DB ID: c5b493599d3d44a689d4932bd8a1d2e8. Both NOTION_TOKEN and NOTION_DB_ID stored as Cloudflare secrets. 4/6 secrets now in place (missing: GOOGLE_PLACES_API_KEY, ANTHROPIC_API_KEY). Views still need manual creation in Notion UI.
