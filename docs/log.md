@@ -1,3 +1,7 @@
+## 2026-05-04 15:00 — Task 2 code complete; blocked on wrangler login + LINE access token
+
+LINE webhook skeleton built: signature verification middleware (Web Crypto), LINE API integration module, echo handler, welcome message on follow/join, loading indicator. TypeScript clean. Committed to main. Waiting for user to run `wrangler login` and provide LINE_CHANNEL_ACCESS_TOKEN before verification can proceed.
+
 ## 2026-05-04 14:45 — Task 1 complete: project bootstrapped and pushed to GitHub
 
 Hono + Cloudflare Workers project scaffolded manually (existing docs dir made npm create unreliable). Health endpoint verified locally. `@cloudflare/vitest-pool-workers` upgraded to 0.15.2 to clear security advisory; vitest config updated to use the new pool API (no longer uses `defineWorkersConfig`). Committed and pushed to git@github.com:raylin/alfred.git on main. Ready for Task 2.
