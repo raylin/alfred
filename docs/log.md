@@ -1,3 +1,7 @@
+## 2026-05-04 — Phase 0+1 complete: spec synced to v1.1
+
+All 12 tasks shipped and deployed to alfred.raylin.cc. Spec changelog (docs/spec-changelog.md) records CL-001 through CL-007; alfred-phase-0-1-spec.md updated to version 1.1 with all amendments applied. Phase 0+1 is closed. Next: Task 12 acceptance tests and Phase 1.5 planning.
+
 ## 2026-05-04 15:00 — Task 11 complete: Image Input (Claude Vision)
 
 fetchMessageContent in line.ts (binary → base64, LINE Content API at api-data.line.me). isImageMessage predicate. chatJsonWithImage in anthropic.ts. extractFromImage + NoPlaceDetectedError + IMAGE_SYSTEM_PROMPT in extract.ts. ImageRawInput in kv-store.ts (no base64 stored — ADR-013). flow-image.ts: size gate (5MB) → vision extract → Notion → KV → Flex or fallback text. placesImageHandler in handler.ts. index.ts: detects image messages before text routing, dispatches directly to placesImageHandler (skip intent router — ADR-012). _registry.ts: accepts_images: true on places. ADR-012 (image bypass router + accepts_images), ADR-013 (no base64 in KV). 221 tests pass (25 new). TypeScript clean. Awaiting user acceptance + deployment.

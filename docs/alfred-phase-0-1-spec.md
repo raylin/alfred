@@ -6,7 +6,7 @@
 **Capability:** places (家庭親子景點記錄)
 **Bot face name:** 阿福
 **Production URL:** `https://alfred.raylin.cc`
-**Last updated:** 2026-05-04
+**Last updated:** 2026-05-04, version 1.1
 
 ---
 
@@ -100,9 +100,16 @@ Wife: [shares Google Maps URL to 阿福]
 阿福: [Flex Message; most fields from Google, fewer AI推測 badges]
 ```
 
-### Story D — Browse in Notion
+### Story D — Instagram URL
 
-Pure Notion. Wife uses Notion app's gallery / table / map (embed) views and filters. Out of bot scope but listed because it informs DB schema design (must look good in gallery view).
+```
+Wife: [pastes https://www.instagram.com/p/XYZ...]
+阿福: [typing indicator]
+阿福: IG 連結我目前還沒辦法直接讀，可以截圖傳給我，或直接告訴我地點名稱。
+      (if OG description ≥ 30 chars: extracts from OG tags → Notion → Flex card instead)
+```
+
+Bot detects `instagram.com` URL, fetches OG tags with `facebookexternalhit` UA. If `og:description` is ≥ 30 chars, extracts via Claude from the description text. If shorter, sends fallback directing user to send a screenshot (→ Story F). `source_type = []` — semantic source unknown at bot level. (CL-006)
 
 ### Story E — Natural Language Search
 
@@ -114,9 +121,24 @@ Wife: 下雨天三歲適合的台北景點
 
 Bot uses Claude (Haiku) to parse intent into Notion query filters, runs query, returns carousel. If 0 matches, response: "目前 Notion 裡沒有完全符合的,要不要放寬條件?" If too many (>10), reply with top 5 and a hint to narrow.
 
-### Story F — Group Chat Use
+### Story F — Image Input
 
-PM and wife are both in a 2-person LINE group with 阿福 added. Any of A/B/C/E works in group exactly as in 1:1. Bot replies to the same chat (group or 1:1). Bot does NOT distinguish behaviors between 1:1 and group in Phase 0+1.
+```
+Wife: [sends photo — IG screenshot, shop sign, magazine clipping, etc.]
+阿福: [typing indicator]
+阿福: [Flex Message: extracted draft with Notion link]
+      (or: 看起來不是景點相關的圖，可以再試一次，或直接告訴我地點名稱。)
+```
+
+Bot receives a LINE image message, fetches binary from LINE Content API (`api-data.line.me`), passes to Claude Vision (Sonnet) to extract place info. If Claude cannot identify a place (`{ "error": "no_place_detected" }`), sends fallback text. Images > 5MB rejected before Claude call. `source_type = []`. KV stores metadata (line_message_id, mime_type, size_bytes) but NOT the base64 payload. (CL-006)
+
+### Story G — IG URL → Image Transition
+
+User pastes an IG URL (Story D fallback path) → receives "截圖傳給我" message → sends screenshot → Story F handles it correctly. No special bot state needed; the two flows compose naturally. (CL-006)
+
+### Story H — Group Chat Use
+
+PM and wife are both in a 2-person LINE group with 阿福 added. Any of A/B/C/E/F works in group exactly as in 1:1. Bot replies to the same chat (group or 1:1). Bot does NOT distinguish behaviors between 1:1 and group in Phase 0+1.
 
 ---
 
@@ -145,23 +167,27 @@ alfred/
 ├── src/
 │   ├── index.ts                    Hono app, LINE webhook entry, signature verify
 │   ├── core/
-│   │   ├── intent-router.ts        Classifies incoming message → capability (Phase 0+1: only `places`)
+│   │   ├── intent-router.ts        LLM-based capability classifier (Claude Haiku, confidence threshold 0.6); slash command priority layer; image messages bypass entirely
 │   │   ├── line-signature.ts       LINE webhook signature verification middleware
 │   │   └── env.ts                  Typed env binding (LINE_*, NOTION_*, ANTHROPIC_API_KEY, GOOGLE_PLACES_API_KEY, KV)
 │   ├── capabilities/
-│   │   ├── _registry.ts            Future capability registry (Phase 0+1: just exports `places`)
+│   │   ├── _registry.ts            Capability registry; `Capability` type includes `accepts_images?: boolean`; `places` has `accepts_images: true` for forward-compatible image dispatch
 │   │   └── places/
 │   │       ├── handler.ts          Capability entry: dispatch input type → flow
 │   │       ├── schema.ts           Place TypeScript types + Notion property mapping
-│   │       ├── input-detect.ts     Detect input type (URL / plain text / Google Maps URL)
+│   │       ├── input-detect.ts     Detect input type (URL / Google Maps URL / Instagram URL / plain text)
 │   │       ├── flow-a-url.ts       Story A
 │   │       ├── flow-b-text.ts      Story B
 │   │       ├── flow-c-maps.ts      Story C
+│   │       ├── flow-d-instagram.ts Story D (Instagram URL — OG tag extraction + fallback)
 │   │       ├── flow-e-search.ts    Story E
-│   │       ├── extract.ts          Claude extraction wrapper
+│   │       ├── flow-image.ts       Story F (Claude Vision image extraction)
+│   │       ├── extract.ts          Claude extraction wrapper (text + vision)
 │   │       ├── search-parser.ts    Claude (Haiku) intent parser for search
-│   │       ├── flex-message.ts     Build LINE Flex Message JSON for draft / search results
-│   │       └── duplicate-check.ts  Check Notion for existing place by google_place_id or name
+│   │       ├── flex-message.ts     Build LINE Flex Message JSON for draft / search results / dedup card
+│   │       ├── kv-store.ts         KV read/write helpers for raw extraction + user last_place
+│   │       ├── duplicate-check.ts  Check KV (fast path) + Notion (slow path) for existing place
+│   │       └── errors.ts           PlacesError and error type hierarchy
 │   ├── integrations/
 │   │   ├── line.ts                 reply / push / loading / signature
 │   │   ├── notion.ts               Place DB CRUD; property mapper
@@ -253,7 +279,7 @@ The wife will use this Notion DB heavily. Schema needs to look good in:
 | 收費細節 | `Fee Details` | Rich text | — | "入園免費,設施計次 $50/次" |
 | 簡述 | `Summary` | Rich text | — | AI-generated 1-2 sentence summary. |
 | 來源網址 | `Source URLs` | URL | — | Single primary URL. |
-| 來源類型 | `Source Type` | Multi-select | 部落格 / Google Maps / 朋友推薦 / 自己探索 / 官方網站 | |
+| 來源類型 | `Source Type` | Multi-select | 部落格 / Google Maps / 朋友推薦 / 自己探索 / 官方網站 | Semantic provenance — how the user discovered the place, not which API the bot used. Per-story assignment (CL-003): Story A (blog URL) → `['部落格']`; Story B (plain text) → `[]` (unknown, family fills in at review); Story C (Google Maps URL) → `['Google Maps']`; Story D (Instagram URL) → `[]`; Story F (Image) → `[]`. |
 | AI 推測欄位 | `AI Inferred Fields` | Multi-select | (auto-populated by bot with field names that had low confidence) | E.g., `Age Min, Age Max, Seasons` — wife knows what to verify. |
 | 內部 ID | `Internal ID` | Rich text | UUID v4 | Joins Notion ↔ KV. Hidden from default views. |
 | 建立者 (LINE) | `Created By` | Rich text | LINE userId | Hidden from default views. For Phase 3. |
@@ -285,9 +311,10 @@ KV namespace: `ALFRED_KV`
 | Key pattern | Value | TTL | Purpose |
 |---|---|---|---|
 | `place:{internal_id}:raw` | JSON: `{ raw_input, raw_html, raw_claude_response, extracted_at }` | 90 days | Phase 1.5 conversational re-extraction |
-| `place:{internal_id}:last_bot_msg` | JSON: `{ message_id, chat_id, sent_at }` | 7 days | Phase 1.5 "modify last entry" |
-| `user:{line_user_id}:last_place` | `{internal_id, sent_at}` | 24 hours | Phase 1.5 "改成 5-10 歲" needs to know which place was last touched |
-| `dedup:{google_place_id}` | `{notion_page_id, internal_id}` | 30 days | Fast duplicate check before hitting Notion API |
+| `user:{line_user_id}:last_place` | `{internal_id, sent_at, chat_id}` | 24 hours | Phase 1.5 "改成 5-10 歲" needs to know which place was last touched; `chat_id` needed to push the edit reply to the correct conversation |
+| `dedup:{google_place_id}` | `{notion_page_id, internal_id, name}` | 30 days | Fast duplicate check before hitting Notion API; `name` needed to render dedup card without a Notion read-back |
+
+(CL-002: removed `place:{internal_id}:last_bot_msg` — LINE Reply API does not return sent message ID, not implementable; updated `user:last_place` value to include `chat_id`; updated `dedup` value to include `name`.)
 
 KV reads / writes are best-effort; failures must NOT break the user-facing flow.
 
@@ -421,6 +448,9 @@ When 阿福 is added to a 1:1 or group (LINE event types `follow` and `join`):
 | Duplicate detected (same google_place_id, status != archived) | `Notion 裡已經有「{name}」了(建立於 {date})。要更新還是不用?` Reply with two buttons: "更新" / "不用". (For Phase 0+1, both buttons just send canned text replies — actual update logic is Phase 1.5.) |
 | Search returns 0 results | `沒有完全符合的耶,要不要放寬條件?例如不限室內外。` |
 | Reply token expired | Fall back to push API with same content. Log warning. |
+| Instagram URL with insufficient OG content (description < 30 chars) | `IG 連結我目前還沒辦法直接讀，可以截圖傳給我，或直接告訴我地點名稱。` |
+| Image > 5MB (Claude Vision API limit) | `圖片太大了，可以截小一點再傳嗎？或直接告訴我地點名稱。` |
+| Image received but no place detected (Claude returns `{ error: "no_place_detected" }`) | `看起來不是景點相關的圖，可以再試一次，或直接告訴我地點名稱。` |
 
 ---
 
@@ -428,7 +458,7 @@ When 阿福 is added to a 1:1 or group (LINE event types `follow` and `join`):
 
 ### 7.1 Model Selection
 
-- **Extraction (Stories A/B/C):** Claude Sonnet (latest). Use `claude-sonnet-4-7` — verify exact model string at runtime via product-self-knowledge or Anthropic docs.
+- **Extraction (Stories A/B/C):** Claude Sonnet (latest). Use `claude-sonnet-4-6`. (CL-001: originally `claude-sonnet-4-7`; that string was unavailable at implementation time.)
 - **Search intent parsing (Story E):** Claude Haiku (latest, `claude-haiku-4-5-20251001` or newer). Cheap and fast for simple JSON extraction.
 
 ### 7.2 Extraction System Prompt
@@ -650,6 +680,16 @@ Sequenced for incremental progress. Each task ends with a verifiable acceptance 
 
 **Acceptance:** Unit tests for URL parsing covering 3-4 Google Maps URL formats. Integration test (mocked): text search → place details → returns expected shape.
 
+### Task 5.5 — LLM Intent Router
+
+- `capabilities/_registry.ts` — `Capability` type with `id`, `description`, `examples_positive`, `examples_negative`, `keywords`, `accepts_images?: boolean`
+- `core/intent-router.ts` — Claude Haiku-based classifier; confidence threshold 0.6; slash command priority layer; image messages bypass entirely (dispatched directly to first capability with `accepts_images === true`)
+- `core/slash-commands.ts` — `/help`, `/place`
+- `core/unknown-handler.ts` — fallback when no capability matched
+- Wire `index.ts` to use intent router
+
+**Acceptance:** Sending `/help` returns help text. Sending a place name routes to `places`. Sending an unrecognized message gets the unknown handler response. (CL-005)
+
 ### Task 6 — Story A: URL Input Flow
 
 - `capabilities/places/flow-a-url.ts`
@@ -684,19 +724,24 @@ Sequenced for incremental progress. Each task ends with a verifiable acceptance 
 
 ### Task 10 — Error Handling & Edge Cases
 
-- Implement all rows in §6.9
-- Duplicate check via KV first, fall through to Notion
+Full error handling pass (CL-005):
+- Reply-token-expired → push API fallback (ADR-011)
+- Duplicate check: KV fast path + Notion slow path; dedup Flex card with postback buttons (ADR-010)
+- Instagram URL flow — Story D: `facebookexternalhit` OG fetch, 30-char length gate, fallback message (ADR-009)
+- KV write decoupling — independent try/catch per write so a KV failure doesn't block the user-facing reply
 - All errors logged via `console.error` with structured context
 
-**Acceptance:** Manually trigger each error case (bad URL, ambiguous name, duplicate) → bot responds per spec.
+**Acceptance:** Manually trigger each error case (bad URL, ambiguous name, duplicate, IG URL) → bot responds per §6.9.
 
-### Task 11 — Tests
+### Task 11 — Image Input (Story F) (CL-005)
 
-- Unit tests for: `input-detect`, `url-utils`, `html-extract`, Notion property mapper, search filter parser
-- Integration tests with mocked external services for each Story flow
-- Coverage target: >70% for `capabilities/places/`
+- LINE Content API binary fetch → base64 (`fetchMessageContent` in `line.ts`)
+- `accepts_images: true` on `places` capability in `_registry.ts` (ADR-012)
+- `flow-image.ts`: size gate (> 5MB → error text) → `extractFromImage` → Notion → KV (metadata only, no base64 — ADR-013) → Flex card or `no_place_detected` fallback
+- `extractFromImage` + `NoPlaceDetectedError` + `IMAGE_SYSTEM_PROMPT` in `extract.ts`; retries on API failure, does NOT retry on semantic `no_place_detected`
+- `index.ts`: image messages detected before text routing, bypass `handleSlashCommand` and `routeIntent`, dispatch directly to `placesImageHandler`
 
-**Acceptance:** `npm test` passes. Coverage report generated.
+**Acceptance:** Send IG screenshot → Flex draft card + Notion entry. Send selfie → "看起來不是景點相關的圖" fallback. Stories A/B/C/E unaffected.
 
 ### Task 12 — Deploy & Production Verification
 
