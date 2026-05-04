@@ -168,7 +168,7 @@ export function notionPageToPlace(page: NotionPage): Place {
     created_by:         text(N.created_by) || null,
     notion_page_id:     page.id,
     notion_url:         page.url,
-    status:             (prop[N.status]?.status?.name ?? 'draft') as Place['status'],
+    status:             (prop[N.status]?.status?.name ?? 'draft') as Place['status'] & string,
   }
 }
 

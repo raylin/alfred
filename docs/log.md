@@ -1,3 +1,11 @@
+## 2026-05-04 16:55 — Task 4 complete: Claude Extraction Service
+
+anthropic.ts wrapper, extract.ts (extractFromHtml, extractFromGooglePlaces), and uuid.ts written. 14 unit tests pass (32 total). Also fixed a pre-existing exactOptionalPropertyTypes TS error in notion.ts. Model used: claude-sonnet-4-6 (spec says 4-7; not available — noted in report). Awaiting user acceptance before commit.
+
+## 2026-05-04 16:30 — Task 4 started: Claude Extraction Service
+
+Building anthropic.ts wrapper, extract.ts, uuid.ts lib, and unit tests. ANTHROPIC_API_KEY confirmed in Cloudflare secrets (5/6 total; GOOGLE_PLACES_API_KEY is Task 5).
+
 ## 2026-05-04 16:10 — Task 3 complete: Notion integration built and tested
 
 Place schema (`src/capabilities/places/schema.ts`) and Notion CRUD module (`src/integrations/notion.ts`) written. 18 unit tests pass. Live integration test confirmed page creation in Notion DB. Vitest switched from `@cloudflare/vitest-pool-workers` (requires v4, incompatible) to `environment:node` (ADR-003). Awaiting user acceptance before commit.
