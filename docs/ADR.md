@@ -26,3 +26,31 @@ Export a `isTextMessage(msg): msg is LineTextMessageContent` type predicate from
 - Type-safe access to `message.text` without casts.
 - Callers must import `isTextMessage`; slightly more verbose than an inline check.
 - Future message types (image, location) handled by adding additional predicates as needed.
+
+---
+
+## ADR-002 — Script-based Notion DB creation instead of manual UI
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Intercalated (between Task 1 and Task 2; user request)
+
+### Context
+Spec §8.3 assumes the Place DB is created by hand in the Notion UI. The schema has 30 properties with precise API names, types, and select/multi-select options. Hand-keying all of this is slow, error-prone, and produces a result that can't be audited or reproduced. The PM hit this friction directly.
+
+### Decision
+One-time setup script at `scripts/setup-notion-db.ts`, run via `npx tsx`. It reads `NOTION_TOKEN` and `NOTION_PARENT_PAGE_ID` from `.env.local`, calls `notion.databases.create` with the full §4.1 schema, and prints the DB ID. Idempotent: if a database with the same title already exists under the parent page, it skips creation and prints the existing ID.
+
+Note: Notion API version 2025-09-03 (used by `@notionhq/client` v5.x) requires properties to be passed under `initial_data_source.properties` rather than the top-level `properties` field documented in older API references.
+
+### Alternatives considered
+- Manual Notion UI — original spec approach; error-prone for 30 properties, not reproducible.
+- Notion template sharing — can't programmatically configure options, no version control.
+- Terraform/Pulumi with a Notion provider — no stable official provider exists.
+
+### Consequences
+- DB schema is version-controlled and reproducible in `scripts/setup-notion-db.ts`.
+- Future property additions can be done by updating the script and calling `notion.databases.update`.
+- Adds `@notionhq/client`, `dotenv`, `tsx`, `@types/node` as devDependencies (Node.js only; Worker runtime uses raw fetch for Notion).
+- Views (§4.2) still require manual creation — Notion API does not support view management.
+- `scripts/tsconfig.json` overrides Workers types with Node types, scoped to the `scripts/` directory.

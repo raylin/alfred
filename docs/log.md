@@ -1,3 +1,7 @@
+## 2026-05-04 15:30 — Intercalated: Notion DB setup script complete
+
+PM requested a script to replace §8.3's manual 28-property Notion UI setup. Wrote scripts/setup-notion-db.ts using @notionhq/client v5.x (Notion API 2025-09-03, which uses initial_data_source.properties instead of top-level properties). Idempotent, 30 properties, prints DB ID. Views still manual (API limitation). ADR-002 recorded. README updated. Proposed §8.3 spec amendment included in report for PM to bring back to PM Claude.
+
 ## 2026-05-04 15:10 — Task 2 deployed; awaiting LINE webhook URL configuration
 
 Both LINE secrets stored in Cloudflare. KV namespace created (id: 1a7640431a8642239223d4243b55f375). Deployed to alfred.raylin.cc (custom domain, auto-provisioned DNS + TLS). Health endpoint verified via forced resolve. wrangler.toml updated from routes→custom_domain. Waiting for PM to set LINE webhook URL to https://alfred.raylin.cc/line/webhook for live echo test.
