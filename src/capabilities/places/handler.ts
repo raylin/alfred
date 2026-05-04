@@ -2,6 +2,7 @@ import { detectInputType, isSearchQuery } from './input-detect'
 import { runFlowA } from './flow-a-url'
 import { runFlowB } from './flow-b-text'
 import { runFlowC } from './flow-c-maps'
+import { runFlowE } from './flow-e-search'
 import { PlacesError } from './errors'
 import { sendReply, getChatId, type LineSource } from '../../integrations/line'
 import type { Env } from '../../core/env'
@@ -29,12 +30,7 @@ export async function placesHandler(
 
     // Plain text: route to Story E (search) or Story B (add new place)
     if (isSearchQuery(input)) {
-      // Story E (Task 9) — not yet implemented
-      await sendReply(
-        replyToken,
-        [{ type: 'text', text: '搜尋功能尚未開放，敬請期待！' }],
-        env.LINE_CHANNEL_ACCESS_TOKEN,
-      )
+      await runFlowE(input, replyToken, env)
       return
     }
 

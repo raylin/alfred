@@ -177,3 +177,29 @@ Story C (`flow-c-maps.ts`): `source_type = ['Google Maps']` — the user explici
 - Story B entries in Notion will have empty `Source Type` until the family reviews them — expected and acceptable.
 - The `Source Type` filter in Notion views won't surface Story B entries when filtered by a specific source (e.g., "Google Maps only").
 - Prevents future confusion where all plain-text-added places would incorrectly appear to have come from Google Maps.
+
+---
+
+## ADR-008 — Search ranking: last_edited_time desc + in-memory keyword scoring
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 9
+
+### Context
+Notion's database query API does not support relevance scoring. For Story E search results, we need a reasonable default ordering and a way to promote results that better match the user's free-text keywords.
+
+### Decision
+1. **Default sort:** `last_edited_time descending` — entries the wife recently reviewed/edited appear first. More curated entries are more useful.
+2. **Keyword re-ranking:** when `free_text_keywords` is non-empty, sort the Notion results in-memory by keyword hit count (number of distinct keywords found across name + summary + address + categories + fee_details). Ties keep last_edited_time order from step 1.
+
+### Alternatives considered
+- Sort by `created_time` ascending — older entries first; counterproductive as they're less likely to be reviewed.
+- Sort by name alphabetically — arbitrary; doesn't reflect curation quality.
+- LLM re-ranking (pass results back to Claude for relevance scoring) — too slow and expensive for real-time search.
+
+### Consequences
+- Recently-confirmed places naturally rank higher, which matches wife's mental model ("I just confirmed that park last week").
+- Keyword scoring is simple substring match — doesn't handle stemming or synonyms, but sufficient for Chinese place names/summaries.
+- If all results have zero keyword score, order falls back to last_edited_time (from Notion sort).
+- Search observability: every query logs `{ type: 'search_query', parsed_filters, query_intent_summary }` and `{ type: 'search_result', candidate_count }` for future quality analysis.

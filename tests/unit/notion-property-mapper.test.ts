@@ -164,15 +164,15 @@ describe('notionPageToPlace', () => {
 // --- buildNotionFilter ---
 
 describe('buildNotionFilter', () => {
-  it('always includes status = confirmed', () => {
+  it('always excludes archived status', () => {
     const filter = buildNotionFilter({})
-    expect(JSON.stringify(filter)).toContain('"confirmed"')
+    expect(JSON.stringify(filter)).toContain('"archived"')
     expect(JSON.stringify(filter)).toContain(N.status)
   })
 
-  it('returns single condition directly when only status', () => {
+  it('returns single condition directly when only status filter', () => {
     const filter = buildNotionFilter({})
-    expect(filter).toEqual({ property: N.status, status: { equals: 'confirmed' } })
+    expect(filter).toEqual({ property: N.status, status: { does_not_equal: 'archived' } })
   })
 
   it('wraps multiple conditions in and', () => {

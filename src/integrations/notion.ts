@@ -187,7 +187,7 @@ function orFilters(property: string, type: string, key: string, values: string[]
 
 export function buildNotionFilter(filters: SearchFilters): Filter {
   const conditions: Filter[] = [
-    { property: N.status, status: { equals: 'confirmed' } },
+    { property: N.status, status: { does_not_equal: 'archived' } },
   ]
 
   if (filters.indoor_outdoor)
@@ -286,7 +286,7 @@ export async function searchPlaces(
     `/databases/${env.NOTION_DB_ID}/query`,
     {
       filter: buildNotionFilter(filters),
-      sorts: [{ property: N.name, direction: 'ascending' }],
+      sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
       page_size: limit,
     },
     env.NOTION_TOKEN,

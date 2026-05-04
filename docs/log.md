@@ -1,3 +1,7 @@
+## 2026-05-04 15:00 — Task 9 complete: Story E — Natural Language Search
+
+search-parser.ts (Claude Haiku intent → SearchFilters), flow-e-search.ts (parse → Notion query → in-memory scoring → carousel), buildSearchCarousel in flex-message.ts, handler.ts routes isSearchQuery to runFlowE. notion.ts: status filter changed to does_not_equal archived (includes draft + confirmed), sort changed to last_edited_time desc. ADR-008 recorded. 18 new tests (9 search-parser + 9 flow-e-search); 168 total. TypeScript clean. Awaiting user acceptance + deployment.
+
 ## 2026-05-04 14:15 — Task 7+8 fix: Story B source_type corrected to []
 
 Post-acceptance fix: changed flow-b-text.ts source_type from ['Google Maps'] to [] (empty). Spec §4.1 Source Type is semantic provenance (how user discovered the place), not API data source. Plain text input has unknown provenance — leave blank for family review. ADR-007 recorded. 1 new test added (150 total).

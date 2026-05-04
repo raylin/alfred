@@ -131,3 +131,92 @@ export function buildDraftCard(place: Place, note?: string): LineFlexMessage {
     },
   }
 }
+
+function buildSearchBubble(place: Place): Record<string, unknown> {
+  const metaParts: string[] = []
+  if (place.categories.length > 0) metaParts.push(place.categories[0])
+  if (place.region) metaParts.push(place.region)
+  if (place.indoor_outdoor) metaParts.push(place.indoor_outdoor)
+
+  const bodyContents: FlexComponent[] = []
+
+  // Age range
+  if (place.age_min != null || place.age_max != null) {
+    let ageText: string
+    if (place.age_min != null && place.age_max != null) ageText = `${place.age_min}–${place.age_max} 歲`
+    else if (place.age_min != null) ageText = `${place.age_min} 歲以上`
+    else ageText = `${place.age_max} 歲以下`
+    bodyContents.push({ type: 'text', text: `年齡 ${ageText}`, size: 'xs', color: '#555555' })
+  }
+
+  // Fee
+  if (place.fee_type) {
+    bodyContents.push({ type: 'text', text: place.fee_type, size: 'xs', color: '#555555' })
+  }
+
+  // Address (short)
+  if (place.address) {
+    bodyContents.push({
+      type: 'text',
+      text: place.address.slice(0, 25),
+      size: 'xs',
+      color: '#888888',
+      wrap: true,
+    })
+  }
+
+  // Summary (if body is sparse)
+  if (bodyContents.length < 2 && place.summary) {
+    bodyContents.push({
+      type: 'text',
+      text: place.summary.slice(0, 60),
+      size: 'xs',
+      color: '#555555',
+      wrap: true,
+    })
+  }
+
+  const notionUri = place.notion_url ?? `https://www.notion.so/${place.notion_page_id ?? ''}`
+
+  return {
+    type: 'bubble',
+    size: 'kilo',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      paddingAll: 'md',
+      spacing: 'xs',
+      contents: [
+        { type: 'text', text: place.name, weight: 'bold', size: 'md', wrap: true, color: '#111111' },
+        ...(metaParts.length > 0
+          ? [{ type: 'text', text: metaParts.join(' · '), size: 'xs', color: '#888888', wrap: true }]
+          : []),
+        ...(bodyContents.length > 0 ? [{ type: 'separator', margin: 'sm' }, ...bodyContents] : []),
+      ],
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      paddingAll: 'sm',
+      contents: [
+        {
+          type: 'button',
+          style: 'link',
+          height: 'sm',
+          action: { type: 'uri', label: '在 Notion 開啟', uri: notionUri },
+        },
+      ],
+    },
+  }
+}
+
+export function buildSearchCarousel(places: Place[]): LineFlexMessage {
+  return {
+    type: 'flex',
+    altText: `找到 ${places.length} 個地點`,
+    contents: {
+      type: 'carousel',
+      contents: places.map(buildSearchBubble),
+    },
+  }
+}
