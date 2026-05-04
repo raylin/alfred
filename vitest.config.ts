@@ -1,0 +1,19 @@
+import { defineConfig } from 'vitest/config'
+
+export default defineConfig({
+  test: {
+    pool: '@cloudflare/vitest-pool-workers',
+    poolOptions: {
+      workers: {
+        wrangler: { configPath: './wrangler.toml' },
+      },
+    },
+    coverage: {
+      provider: 'v8',
+      include: ['src/capabilities/**'],
+      thresholds: {
+        lines: 70,
+      },
+    },
+  },
+})
