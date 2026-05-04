@@ -93,7 +93,7 @@ describe('runFlowA — happy path', () => {
   it('writes to KV with correct key pattern', async () => {
     await runFlowA(BLOG_URL, 'reply-token', mockEnv)
 
-    const kvPut = (mockEnv.ALFRED_KV as { put: ReturnType<typeof vi.fn> }).put
+    const kvPut = (mockEnv.ALFRED_KV as unknown as { put: ReturnType<typeof vi.fn> }).put
     expect(kvPut).toHaveBeenCalledWith(
       expect.stringMatching(/^place:.+:raw$/),
       expect.any(String),
@@ -142,7 +142,7 @@ describe('runFlowA — error handling', () => {
     vi.mocked(fetch).mockResolvedValue(makeFetchResponse(HTML_BODY) as unknown as Response)
     mockExtract.mockResolvedValue(SAMPLE_PLACE)
     mockCreate.mockResolvedValue(NOTION_RESULT)
-    ;(mockEnv.ALFRED_KV as { put: ReturnType<typeof vi.fn> }).put.mockRejectedValueOnce(new Error('KV error'))
+    ;(mockEnv.ALFRED_KV as unknown as { put: ReturnType<typeof vi.fn> }).put.mockRejectedValueOnce(new Error('KV error'))
 
     await expect(runFlowA(BLOG_URL, 'reply-token', mockEnv)).resolves.toBeUndefined()
     expect(mockReply).toHaveBeenCalledOnce()

@@ -1,32 +1,44 @@
-import { detectInputType } from './input-detect'
+import { detectInputType, isSearchQuery } from './input-detect'
 import { runFlowA } from './flow-a-url'
+import { runFlowB } from './flow-b-text'
+import { runFlowC } from './flow-c-maps'
 import { PlacesError } from './errors'
-import { sendReply } from '../../integrations/line'
+import { sendReply, getChatId, type LineSource } from '../../integrations/line'
 import type { Env } from '../../core/env'
 
-export async function placesHandler(input: string, replyToken: string, env: Env): Promise<void> {
+export async function placesHandler(
+  input: string,
+  replyToken: string,
+  env: Env,
+  source?: LineSource,
+): Promise<void> {
   const inputType = detectInputType(input)
+  const userId = source?.userId
+  const chatId = source !== undefined ? getChatId(source) : undefined
 
   try {
     if (inputType === 'url') {
-      await runFlowA(input, replyToken, env)
+      await runFlowA(input, replyToken, env, userId, chatId)
       return
     }
+
     if (inputType === 'google-maps-url') {
-      // TODO Task 8: Story C
+      await runFlowC(input, replyToken, env, userId, chatId)
+      return
+    }
+
+    // Plain text: route to Story E (search) or Story B (add new place)
+    if (isSearchQuery(input)) {
+      // Story E (Task 9) — not yet implemented
       await sendReply(
         replyToken,
-        [{ type: 'text', text: '收到 Google Maps 連結！（整合功能建置中，請稍候）' }],
+        [{ type: 'text', text: '搜尋功能尚未開放，敬請期待！' }],
         env.LINE_CHANNEL_ACCESS_TOKEN,
       )
       return
     }
-    // Plain text → TODO Task 7 (Story B) / Task 9 (Story E)
-    await sendReply(
-      replyToken,
-      [{ type: 'text', text: '收到！（文字輸入功能建置中，請稍候）' }],
-      env.LINE_CHANNEL_ACCESS_TOKEN,
-    )
+
+    await runFlowB(input, replyToken, env, userId, chatId)
   } catch (err) {
     console.error('[places-handler] flow failed', { inputType, err: String(err) })
     const msg = err instanceof PlacesError ? err.userMessage : '整理時遇到狀況，請再傳一次。'

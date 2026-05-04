@@ -27,7 +27,7 @@ function inferred(place: Place, ...fields: string[]): boolean {
   return fields.some(f => place.ai_inferred_fields.includes(f))
 }
 
-export function buildDraftCard(place: Place): LineFlexMessage {
+export function buildDraftCard(place: Place, note?: string): LineFlexMessage {
   // Header subtitle
   const subtitleParts: string[] = [...place.categories]
   if (place.indoor_outdoor) subtitleParts.push(place.indoor_outdoor)
@@ -51,6 +51,12 @@ export function buildDraftCard(place: Place): LineFlexMessage {
 
   // Body rows (§6.6 priority order, skip null)
   const bodyContents: FlexComponent[] = []
+
+  // Disambiguation note (Story B: multiple candidates)
+  if (note) {
+    bodyContents.push({ type: 'text', text: note, size: 'sm', color: '#888888', wrap: true })
+    bodyContents.push({ type: 'separator' })
+  }
 
   // 位置
   const locationParts: string[] = []

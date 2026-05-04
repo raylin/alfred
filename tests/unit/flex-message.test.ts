@@ -81,8 +81,22 @@ describe('buildDraftCard', () => {
 
   it('falls back to notion_page_id in URL when notion_url absent', () => {
     const { notion_url: _notionUrl, ...placeNoUrl } = PLACE_WITH_NOTION
-    const msg = buildDraftCard({ ...placeNoUrl, notion_url: undefined })
+    const msg = buildDraftCard(placeNoUrl)
     const contents = JSON.stringify(msg.contents)
     expect(contents).toContain('test-page-abc')
+  })
+
+  it('includes disambiguation note in body when note is provided', () => {
+    const note = '找到的是：台北市士林區，不是的話告訴我正確的地點。'
+    const msg = buildDraftCard(PLACE_WITH_NOTION, note)
+    const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
+    expect(bodyStr).toContain('找到的是')
+    expect(bodyStr).toContain('台北市士林區')
+  })
+
+  it('does not include note text when note is undefined', () => {
+    const msg = buildDraftCard(PLACE_WITH_NOTION)
+    const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
+    expect(bodyStr).not.toContain('找到的是')
   })
 })

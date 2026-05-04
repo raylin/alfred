@@ -4,13 +4,20 @@ import { extractFromHtml } from './extract'
 import { createPlace } from '../../integrations/notion'
 import { sendReply } from '../../integrations/line'
 import { buildDraftCard } from './flex-message'
+import { writeRawExtraction, writeUserLastPlace } from './kv-store'
 import { PlacesError } from './errors'
 import type { Env } from '../../core/env'
 
 const FETCH_TIMEOUT_MS = 12_000
 const MAX_HTML_CHARS = 4_000
 
-export async function runFlowA(url: string, replyToken: string, env: Env): Promise<void> {
+export async function runFlowA(
+  url: string,
+  replyToken: string,
+  env: Env,
+  userId?: string,
+  chatId?: string,
+): Promise<void> {
   // 1. Fetch the URL
   let html: string
   try {
@@ -46,18 +53,16 @@ export async function runFlowA(url: string, replyToken: string, env: Env): Promi
     throw new PlacesError(`已經整理好了，但寫入 Notion 失敗。錯誤：${msg}`)
   }
 
-  // 5. Write raw extraction to KV — best-effort, failure must not block reply (§5)
+  // 5. Write to KV — best-effort, failure must not block reply (§5)
   try {
-    await env.ALFRED_KV.put(
-      `place:${place.internal_id}:raw`,
-      JSON.stringify({
-        raw_input: url,
-        raw_html: text,
-        raw_place_json: JSON.stringify(place),
-        extracted_at: new Date().toISOString(),
-      }),
-      { expirationTtl: 90 * 24 * 60 * 60 },
-    )
+    await writeRawExtraction(env, place.internal_id, {
+      raw_input: url,
+      raw_html: text,
+      extracted_at: new Date().toISOString(),
+    })
+    if (userId !== undefined && chatId !== undefined) {
+      await writeUserLastPlace(env, userId, place.internal_id, chatId)
+    }
   } catch (err) {
     console.error('[flow-a] KV write failed (non-fatal)', err)
   }

@@ -1,3 +1,11 @@
+## 2026-05-04 14:15 — Task 7+8 fix: Story B source_type corrected to []
+
+Post-acceptance fix: changed flow-b-text.ts source_type from ['Google Maps'] to [] (empty). Spec §4.1 Source Type is semantic provenance (how user discovered the place), not API data source. Plain text input has unknown provenance — leave blank for family review. ADR-007 recorded. 1 new test added (150 total).
+
+## 2026-05-04 14:10 — Task 7+8 complete: Story B (plain text) + Story C (Google Maps URL)
+
+kv-store.ts (shared writeRawExtraction + writeUserLastPlace), flow-b-text.ts (textSearch → getPlaceDetails → Claude → Notion → KV → Flex), flow-c-maps.ts (parseGoogleMapsUrl → getPlaceDetails fallback to textSearch → Claude → Notion → KV → Flex). isSearchQuery added to input-detect.ts. buildDraftCard accepts optional disambiguation note. handler.ts now routes search queries to stub, plain text to Story B, Google Maps URLs to Story C, passing LineSource throughout. index.ts passes event.source to dispatchCapability. ADR-006 recorded. 41 new tests; 149 total. TypeScript clean. Awaiting user acceptance + deployment.
+
 ## 2026-05-04 18:20 — Task 5 complete: Google Places Integration
 
 google-places.ts written: textSearch, getPlaceDetails, parseGoogleMapsUrl (full + short URLs via redirect: follow + res.url), toGooglePlacesContext. 16 unit tests covering 6 URL formats and mocked API responses. 69 tests total. GOOGLE_PLACES_API_KEY stored (6/6 secrets complete). Awaiting user acceptance.

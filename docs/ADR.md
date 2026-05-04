@@ -129,3 +129,51 @@ The original spec §3.2 designated `intent-router.ts` as "Phase 0+1: just routes
 - Haiku API call on every text message adds ~200-500ms latency; acceptable given LINE loading indicator covers up to 60s.
 - Confidence threshold is a tunable constant (`CONFIDENCE_THRESHOLD` in `intent-router.ts`); can adjust based on production routing logs.
 - Observability: every routing decision logged as JSON (`type: intent_routing`) — useful for future accuracy analysis.
+
+---
+
+## ADR-006 — User-side KV key for last-place anchor (`user:{userId}:last_place`)
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 7+8 (spec amendment §5)
+
+### Context
+Phase 1.5 will allow users to edit the most recently added place with a message like "改成 5-10 歲". The bot needs an anchor: a pointer from "this user's current session" to the specific place they last added. Two design options were considered: (a) store the reply message ID alongside the place (`place:{id}:last_bot_msg`), or (b) store a user-side pointer to the place (`user:{userId}:last_place`).
+
+### Decision
+Use `user:{line_user_id}:last_place` with TTL 24 hours and value `{ internal_id, sent_at, chat_id }`.
+
+### Alternatives considered
+- `place:{internal_id}:last_bot_msg` keyed by place: LINE Reply API does not return a message ID for the sent reply. There is no standard way to obtain the outgoing message ID without using the push API (which has different rate limits and billing). Even if obtainable, message-side storage doesn't naturally answer "what was *this user's* last place".
+- No KV at all, infer from Notion: querying Notion for "most recently created by this user" is slow and requires a createdBy field reliably set — not guaranteed in all flows.
+
+### Consequences
+- Phase 1.5 "edit last place" simply reads `user:{userId}:last_place`, resolves `internal_id` to a Notion page, and patches it.
+- 24-hour TTL means the editing window is bounded — reasonable given parents typically review output immediately.
+- `chat_id` stored for future use if group-chat context matters (e.g., different editing rules for family group vs. personal DM).
+- If the user adds two places in quick succession, the key is overwritten: only the most recent is the "last place". This is the expected behavior.
+
+---
+
+## ADR-007 — Story B `source_type = []` (empty), not `['Google Maps']`
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 7 (post-acceptance fix)
+
+### Context
+Spec §4.1 defines `Source Type` as a multi-select Notion property that tracks *how the user discovered the place* (semantic provenance), not what data source the bot used to look it up. During Task 7 the engineer initially used `['Google Maps']` for Story B, conflating "we queried the Google Places API" with "the user found this on Google Maps". PM corrected this on acceptance.
+
+### Decision
+Story B (`flow-b-text.ts`): `source_type = []` — leave empty so the reviewing family member can fill in the semantic origin manually.
+Story C (`flow-c-maps.ts`): `source_type = ['Google Maps']` — the user explicitly pasted a Google Maps URL, so the semantic source is known.
+
+### Alternatives considered
+- `['Google Maps']` for Story B: incorrect — user may have heard about the place from a friend, a blog, or direct knowledge. We have no signal.
+- Infer from context (e.g. if user's text matches a known blog title, use `['部落格']`): too complex; deferred to Phase 2 if needed.
+
+### Consequences
+- Story B entries in Notion will have empty `Source Type` until the family reviews them — expected and acceptable.
+- The `Source Type` filter in Notion views won't surface Story B entries when filtered by a specific source (e.g., "Google Maps only").
+- Prevents future confusion where all plain-text-added places would incorrectly appear to have come from Google Maps.

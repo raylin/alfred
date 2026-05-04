@@ -4,6 +4,7 @@ import type { Variables } from './core/variables'
 import { lineSignatureMiddleware } from './core/line-signature'
 import {
   type LineWebhookBody,
+  type LineSource,
   getChatId,
   isTextMessage,
   startLoadingIndicator,
@@ -44,7 +45,7 @@ async function handleEvents(body: LineWebhookBody, env: Env): Promise<void> {
         const slashOutcome = await handleSlashCommand(message.text, event.replyToken, env)
         if (slashOutcome !== null) {
           if (slashOutcome.type === 'route') {
-            await dispatchCapability(slashOutcome.capability, slashOutcome.input, event.replyToken, env)
+            await dispatchCapability(slashOutcome.capability, slashOutcome.input, event.replyToken, env, event.source)
           }
           continue
         }
@@ -56,7 +57,7 @@ async function handleEvents(body: LineWebhookBody, env: Env): Promise<void> {
           continue
         }
 
-        await dispatchCapability(capability, message.text, event.replyToken, env)
+        await dispatchCapability(capability, message.text, event.replyToken, env, event.source)
       }
     } catch (err) {
       console.error('[webhook] event handler failed', { type: event.type, err })
@@ -69,9 +70,10 @@ async function dispatchCapability(
   input: string,
   replyToken: string,
   env: Env,
+  source?: LineSource,
 ): Promise<void> {
   if (capability === 'places') {
-    await placesHandler(input, replyToken, env)
+    await placesHandler(input, replyToken, env, source)
     return
   }
   await handleUnknown(replyToken, env.LINE_CHANNEL_ACCESS_TOKEN)
