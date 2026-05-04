@@ -1,3 +1,7 @@
+## 2026-05-04 15:45 — Notion DB created; NOTION_DB_ID + NOTION_TOKEN stored
+
+Script ran successfully. DB ID: c5b493599d3d44a689d4932bd8a1d2e8. Both NOTION_TOKEN and NOTION_DB_ID stored as Cloudflare secrets. 4/6 secrets now in place (missing: GOOGLE_PLACES_API_KEY, ANTHROPIC_API_KEY). Views still need manual creation in Notion UI.
+
 ## 2026-05-04 15:30 — Intercalated: Notion DB setup script complete
 
 PM requested a script to replace §8.3's manual 28-property Notion UI setup. Wrote scripts/setup-notion-db.ts using @notionhq/client v5.x (Notion API 2025-09-03, which uses initial_data_source.properties instead of top-level properties). Idempotent, 30 properties, prints DB ID. Views still manual (API limitation). ADR-002 recorded. README updated. Proposed §8.3 spec amendment included in report for PM to bring back to PM Claude.
