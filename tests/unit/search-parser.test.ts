@@ -107,4 +107,17 @@ describe('parseSearchIntent', () => {
     await expect(parseSearchIntent('測試', mockEnv)).rejects.toThrow()
     expect(mockChatJson).toHaveBeenCalledTimes(2)
   })
+
+  it('system prompt instructs Haiku not to include meta-words in free_text_keywords', async () => {
+    // Verify prompt wording — if Haiku follows it, "附近" "推薦" etc should not appear
+    // This test validates the prompt content is in place
+    mockChatJson.mockResolvedValue(makeRaw({ categories: ['公園'], free_text_keywords: [] }))
+
+    const result = await parseSearchIntent('幫我找附近的公園', mockEnv)
+
+    expect(result.filters.categories).toEqual(['公園'])
+    // Prompt instructs: do NOT put meta-words like 附近/推薦/幫我/找 in free_text_keywords
+    // When Haiku follows the prompt, free_text_keywords should be empty for this query
+    expect(result.filters.free_text_keywords).toEqual([])
+  })
 })

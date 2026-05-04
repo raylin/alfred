@@ -23,7 +23,8 @@ const SYSTEM_PROMPT = `你把使用者問題轉成 Notion 篩選條件。輸出 
 - categories 從 [公園, 餐廳, 步道, 動物園, 遊樂園, 博物館, 圖書館, 親子館, 觀光工廠, 沙灘, 露營地, 室內遊戲場] 選。
 - 「下雨天」推測為 indoor_outdoor = "室內"。
 - 「三歲」推測為 age = 3。
-- free_text_keywords 放篩選條件捕捉不到的關鍵字，例如地區俗名、特定設施名稱。
+- free_text_keywords 只放真正描述地點特徵的詞，例如「落羽松」「沙坑」「滑梯」「恐龍」「日式」「複合式」等具體設施或風格詞。
+  不要把「附近」「推薦」「幫我」「找」「有什麼」「適合」「帶小孩去」「好的」這類查詢動詞或 meta 詞放進去。
 - 只回 JSON。`
 
 export type ParsedSearchIntent = {

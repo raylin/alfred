@@ -18,6 +18,8 @@ import { handleSlashCommand } from './core/slash-commands'
 import { routeIntent } from './core/intent-router'
 import { handleUnknown } from './core/unknown-handler'
 import { placesHandler, placesImageHandler } from './capabilities/places/handler'
+import { capabilities } from './capabilities/_registry'
+import { isHttpUrl } from './lib/url-utils'
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 
@@ -84,7 +86,17 @@ async function handleEvents(body: LineWebhookBody, env: Env): Promise<void> {
           continue
         }
 
-        // Priority 2: LLM intent routing
+        // Priority 2: pure URL messages bypass LLM intent router — structural input, not natural language (ADR-014)
+        const trimmedText = message.text.trim()
+        if (isHttpUrl(trimmedText) && !trimmedText.includes(' ')) {
+          const urlCapability = capabilities.find(cap => cap.accepts_urls)
+          if (urlCapability) {
+            await dispatchCapability(urlCapability.id, trimmedText, event.replyToken, env, event.source)
+            continue
+          }
+        }
+
+        // Priority 3: LLM intent routing
         const capability = await routeIntent(message.text, env)
         if (!capability) {
           await handleUnknown(event.replyToken, env.LINE_CHANNEL_ACCESS_TOKEN)

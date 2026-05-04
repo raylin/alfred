@@ -106,6 +106,22 @@ export function toGooglePlacesContext(details: PlaceDetails): GooglePlacesContex
   }
 }
 
+// Default location bias: Taipei Main Station (ADR-015 — Phase 0+1 hardcode; Phase 2 to be user-configurable)
+const DEFAULT_LAT = 25.0478
+const DEFAULT_LNG = 121.5170
+const LOCATION_BIAS_RADIUS_M = 50_000 // 50km covers greater Taipei area
+
+const TW_CITY_PREFIXES = ['台北市', '新北市', '基隆市', '桃園市', '新竹市', '新竹縣', '苗栗縣',
+  '台中市', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '台南市', '高雄市',
+  '屏東縣', '宜蘭縣', '花蓮縣', '台東縣', '澎湖縣', '金門縣', '連江縣']
+
+function isTaiwanAddress(candidate: PlaceCandidate): boolean {
+  const addr = candidate.formatted_address
+  if (addr.includes('台灣') || addr.includes('Taiwan') || addr.includes('TW')) return true
+  if (/^\d{3,5}/.test(addr)) return true // Taiwanese postal codes are 3 or 5 digits
+  return TW_CITY_PREFIXES.some(city => addr.startsWith(city))
+}
+
 // --- API calls ---
 
 export async function textSearch(query: string, env: Env): Promise<PlaceCandidate[]> {
@@ -119,6 +135,12 @@ export async function textSearch(query: string, env: Env): Promise<PlaceCandidat
       textQuery: query,
       languageCode: 'zh-TW',
       maxResultCount: 5,
+      locationBias: {
+        circle: {
+          center: { latitude: DEFAULT_LAT, longitude: DEFAULT_LNG },
+          radius: LOCATION_BIAS_RADIUS_M,
+        },
+      },
     }),
   })
   if (!res.ok) {
@@ -126,7 +148,17 @@ export async function textSearch(query: string, env: Env): Promise<PlaceCandidat
     throw new Error(`Google Places textSearch ${res.status}: ${text}`)
   }
   const data = await res.json() as { places?: RawPlace[] }
-  return (data.places ?? []).map(toCandidate)
+  const candidates = (data.places ?? []).map(toCandidate)
+
+  // Safety net: filter out non-Taiwan results (ADR-015)
+  const twCandidates = candidates.filter(isTaiwanAddress)
+  if (twCandidates.length < candidates.length) {
+    console.warn('[google-places] filtered non-TW results', {
+      query,
+      filtered: candidates.filter(c => !isTaiwanAddress(c)).map(c => c.formatted_address),
+    })
+  }
+  return twCandidates
 }
 
 export async function getPlaceDetails(placeId: string, env: Env): Promise<PlaceDetails | null> {

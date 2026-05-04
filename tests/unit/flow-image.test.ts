@@ -13,13 +13,25 @@ vi.mock('../../src/integrations/notion', () => ({
 vi.mock('../../src/integrations/line', () => ({
   sendReply: vi.fn().mockResolvedValue(undefined),
 }))
+vi.mock('../../src/capabilities/places/resolve-google-place', () => ({
+  resolveGooglePlace: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('../../src/capabilities/places/duplicate-check', () => ({
+  checkDuplicate: vi.fn().mockResolvedValue({ found: false }),
+  writeDedupKV: vi.fn().mockResolvedValue(undefined),
+}))
 
 import { runFlowImage } from '../../src/capabilities/places/flow-image'
 import { PlacesError } from '../../src/capabilities/places/errors'
 import { extractFromImage, NoPlaceDetectedError } from '../../src/capabilities/places/extract'
 import { createPlace } from '../../src/integrations/notion'
 import { sendReply } from '../../src/integrations/line'
+import { resolveGooglePlace } from '../../src/capabilities/places/resolve-google-place'
+import { checkDuplicate } from '../../src/capabilities/places/duplicate-check'
 import { SAMPLE_PLACE } from '../fixtures/places'
+
+const mockResolve = vi.mocked(resolveGooglePlace)
+const mockCheckDuplicate = vi.mocked(checkDuplicate)
 
 const mockExtract = vi.mocked(extractFromImage)
 const mockCreate = vi.mocked(createPlace)
@@ -48,6 +60,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockExtract.mockResolvedValue(SAMPLE_PLACE)
   mockCreate.mockResolvedValue(NOTION_RESULT)
+  mockResolve.mockResolvedValue(null)
+  mockCheckDuplicate.mockResolvedValue({ found: false })
 })
 
 afterEach(() => {
@@ -84,6 +98,29 @@ describe('runFlowImage — happy path', () => {
       expect.any(String),
       expect.objectContaining({ expirationTtl: 24 * 60 * 60 }),
     )
+  })
+})
+
+describe('runFlowImage — Google resolve + dedup', () => {
+  it('sends dedup card and returns early when duplicate found', async () => {
+    mockResolve.mockResolvedValue({ google_place_id: 'ChIJimg', lat: null, lng: null, address: null })
+    mockCheckDuplicate.mockResolvedValue({ found: true, notion_page_id: 'p1', internal_id: 'i1', name: '兒童新樂園' })
+
+    await runFlowImage(IMAGE_INPUT, 'reply-token', mockEnv)
+
+    expect(mockCreate).not.toHaveBeenCalled()
+    const reply = mockReply.mock.calls[0][1][0]
+    expect(reply.type).toBe('flex')
+  })
+
+  it('merges resolved address into place when resolve succeeds', async () => {
+    mockResolve.mockResolvedValue({ google_place_id: 'ChIJimg', lat: 25.0, lng: 121.5, address: '台北市士林區' })
+
+    await runFlowImage(IMAGE_INPUT, 'reply-token', mockEnv)
+
+    const written = mockCreate.mock.calls[0][0]
+    expect(written.google_place_id).toBe('ChIJimg')
+    expect(written.address).toBe('台北市士林區')
   })
 })
 

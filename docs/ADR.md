@@ -329,3 +329,76 @@ Store only metadata in `raw_input` (LINE message ID, MIME type, size_bytes) inst
 - The LINE message ID (`line_message_id`) allows the image to be re-fetched from LINE's Content API during its retention window (~1 week for standard bots, longer for PREMIUM).
 - After retention expiry, the original image is unrecoverable from our storage — acceptable for Phase 0+1 debugging.
 - KV value size for image `raw_extraction` entries is ~100 bytes (metadata + Place JSON), vs. up to 11 MB for the base64 body.
+
+---
+
+## ADR-014 — URL messages bypass LLM intent router; `accepts_urls` forward-compat field in registry
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 12 (Fix 1)
+
+### Context
+During acceptance testing, Instagram URLs sent to the bot were classified as `unknown` by the LLM intent router instead of being routed to the `places` capability. The underlying issue: a pure URL is structural input (like an image), not natural language. Asking Claude Haiku to classify `https://www.instagram.com/reel/ABC/` as a capability is unreliable — the URL syntax provides no natural-language signal.
+
+### Decision
+Add `accepts_urls?: boolean` to the `Capability` type. Set `places: { accepts_urls: true }`. In `index.ts`, before the LLM router: if the trimmed message text is a pure URL (starts with `http://` or `https://` and contains no spaces), find the first capability with `accepts_urls === true` and dispatch directly. This mirrors the image bypass pattern (ADR-012).
+
+### Alternatives considered
+- Add Instagram URL keywords to the intent router's positive examples: fragile, only fixes IG, misses other URL forms.
+- Special-case Instagram URL in index.ts without a registry field: works but doesn't generalize; future capabilities with URL inputs would need the same special case.
+- Lower the confidence threshold for URLs: still relies on LLM to pattern-match URLs, which is hit-or-miss.
+
+### Consequences
+- All pure URL messages bypass the LLM router. Mixed messages ("幫我看 https://example.com 怎樣") still go through the router.
+- Generalizes forward: any future capability that handles URLs can set `accepts_urls: true`.
+- Cost: one `isHttpUrl` check per text message — negligible.
+
+---
+
+## ADR-015 — Google Places `locationBias` hardcoded to Taipei; TW country safety net
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 12 (Fix 3)
+
+### Context
+During acceptance testing, querying "東京迪士尼" correctly triggered a non-TW result. But more subtly, generic queries like "樂園" could return overseas results (Tokyo Disneyland) if the user's intent is clearly Taiwan family destinations. The bot should prefer Taiwan results for ambiguous queries.
+
+### Decision
+1. Add `locationBias` to the `textSearch` request body: a 50km circle centered on Taipei Main Station (25.0478, 121.5170). This is a bias, not a strict filter — Google can still return non-TW results if the query is specifically about overseas locations.
+2. Add `isTaiwanAddress` post-filter: candidates whose `formattedAddress` doesn't include '台灣', 'Taiwan', 'TW', a Taiwanese postal code prefix, or a known Taiwan city name are filtered out and logged as warnings. Phase 0+1 hardcode; Phase 2 to be user-configurable.
+
+### Alternatives considered
+- `languageRestriction: 'zh-TW'` field: only affects language of response text, not result geography.
+- `regionCode: 'TW'` field: not available in Places API (New) textSearch body.
+- Asking Claude to validate the result is in Taiwan: adds an extra LLM call and latency for each search.
+
+### Consequences
+- False negatives: if user intentionally queries an overseas place (planning a Japan trip), the result is filtered and they receive a "not found" response. Acceptable for Phase 0+1 family Taiwan bot.
+- The center point (Taipei Main Station) biases toward northern Taiwan. Family's `home_lat`/`home_lng` should replace this in Phase 2.
+
+---
+
+## ADR-016 — Unified `extract → resolveGooglePlace → dedup → write` pipeline for Stories A, D, F
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 12 (Fix 4)
+
+### Context
+In the original Phase 0+1 implementation, only Stories B and C (which start from Google Places) could run the dedup check, because only they had a `google_place_id`. Stories A (blog URL), D (Instagram), and F (Image) extracted place info via Claude but wrote to Notion without any dedup check — so the same place could be saved multiple times if the user sent both a blog URL and a photo of the same venue.
+
+### Decision
+Create `src/capabilities/places/resolve-google-place.ts` with `resolveGooglePlace(place, env)`. After Claude extraction, all three flows (A, D, F) call this function, which runs a Google Places textSearch using `name + region`, applies a fuzzy name match on the top result, then fetches full details to get `google_place_id`, `lat`, `lng`, and `address`. If resolution succeeds, the enriched fields overwrite the Claude-extracted values before Notion write. Then `checkDuplicate` is called normally with the resolved `google_place_id`.
+
+### Alternatives considered
+- Store a name-based hash in KV for dedup: fragile (name variations, typos). Google Place ID is the canonical dedup key.
+- Run dedup only for B/C and accept duplicates for A/D/F: leaves the most common cross-flow duplicate case (blog + screenshot of same place) undetected.
+- Call resolution only for high-confidence extractions (based on `ai_inferred_fields`): adds complexity; resolution failure already returns null gracefully.
+
+### Consequences
+- One extra Google Places textSearch per A/D/F flow success (~$0.002 per call, negligible at family scale).
+- If Claude extracted the wrong name, resolution may match a different place — wrong `google_place_id` attached. The fuzzy match (extracted name contains Google name, or vice versa) mitigates this, but doesn't eliminate it.
+- Resolution failure is non-fatal: returns null, flow continues without `google_place_id`, no dedup for that entry.
+- ADR-010 ("Story A and Story D: no dedup") is now superseded by this ADR for the cases where resolution succeeds.

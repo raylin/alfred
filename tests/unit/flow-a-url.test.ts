@@ -10,13 +10,25 @@ vi.mock('../../src/integrations/notion', () => ({
 vi.mock('../../src/integrations/line', () => ({
   sendReply: vi.fn().mockResolvedValue(undefined),
 }))
+vi.mock('../../src/capabilities/places/resolve-google-place', () => ({
+  resolveGooglePlace: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('../../src/capabilities/places/duplicate-check', () => ({
+  checkDuplicate: vi.fn().mockResolvedValue({ found: false }),
+  writeDedupKV: vi.fn().mockResolvedValue(undefined),
+}))
 
 import { runFlowA } from '../../src/capabilities/places/flow-a-url'
 import { PlacesError } from '../../src/capabilities/places/errors'
 import { extractFromHtml } from '../../src/capabilities/places/extract'
 import { createPlace } from '../../src/integrations/notion'
 import { sendReply } from '../../src/integrations/line'
+import { resolveGooglePlace } from '../../src/capabilities/places/resolve-google-place'
+import { checkDuplicate } from '../../src/capabilities/places/duplicate-check'
 import { SAMPLE_PLACE } from '../fixtures/places'
+
+const mockResolve = vi.mocked(resolveGooglePlace)
+const mockCheckDuplicate = vi.mocked(checkDuplicate)
 
 const mockExtract = vi.mocked(extractFromHtml)
 const mockCreate = vi.mocked(createPlace)
@@ -49,6 +61,8 @@ function makeFetchResponse(body: string, ok = true, status = 200, contentType = 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn())
   vi.clearAllMocks()
+  mockResolve.mockResolvedValue(null)
+  mockCheckDuplicate.mockResolvedValue({ found: false })
 })
 
 afterEach(() => {
@@ -99,6 +113,43 @@ describe('runFlowA — happy path', () => {
       expect.any(String),
       expect.objectContaining({ expirationTtl: expect.any(Number) }),
     )
+  })
+})
+
+describe('runFlowA — Google resolve + dedup', () => {
+  beforeEach(() => {
+    vi.mocked(fetch).mockResolvedValue(makeFetchResponse(HTML_BODY) as unknown as Response)
+    mockExtract.mockResolvedValue(SAMPLE_PLACE)
+    mockCreate.mockResolvedValue(NOTION_RESULT)
+  })
+
+  it('merges resolved google_place_id into place before Notion write', async () => {
+    mockResolve.mockResolvedValue({ google_place_id: 'ChIJresolved', lat: 25.0, lng: 121.5, address: '台北市某路' })
+
+    await runFlowA(BLOG_URL, 'reply-token', mockEnv)
+
+    const written = mockCreate.mock.calls[0][0]
+    expect(written.google_place_id).toBe('ChIJresolved')
+  })
+
+  it('sends dedup card and returns early when duplicate found', async () => {
+    mockResolve.mockResolvedValue({ google_place_id: 'ChIJresolved', lat: null, lng: null, address: null })
+    mockCheckDuplicate.mockResolvedValue({ found: true, notion_page_id: 'p1', internal_id: 'i1', name: '兒童新樂園' })
+
+    await runFlowA(BLOG_URL, 'reply-token', mockEnv)
+
+    expect(mockCreate).not.toHaveBeenCalled()
+    const reply = mockReply.mock.calls[0][1][0]
+    expect(reply.type).toBe('flex')
+  })
+
+  it('proceeds normally when resolve returns null (no google_place_id)', async () => {
+    mockResolve.mockResolvedValue(null)
+
+    await runFlowA(BLOG_URL, 'reply-token', mockEnv)
+
+    expect(mockCreate).toHaveBeenCalledOnce()
+    expect(mockReply).toHaveBeenCalledOnce()
   })
 })
 

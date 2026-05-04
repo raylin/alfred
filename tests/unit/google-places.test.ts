@@ -157,6 +157,45 @@ describe('textSearch', () => {
     )
     await expect(textSearch('test', mockEnv)).rejects.toThrow('400')
   })
+
+  it('sends locationBias centered on Taipei in request body', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      makeFetchResponse({ places: [] }) as unknown as Response,
+    )
+    await textSearch('兒童新樂園', mockEnv)
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string)
+    expect(body.locationBias).toBeDefined()
+    expect(body.locationBias.circle.center.latitude).toBeCloseTo(25.0478)
+    expect(body.locationBias.circle.radius).toBe(50_000)
+  })
+
+  it('filters out non-Taiwan results', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      makeFetchResponse({
+        places: [
+          {
+            id: 'ChIJtokyo',
+            displayName: { text: '東京ディズニーランド' },
+            formattedAddress: 'Japan, Urayasu, Chiba',
+            types: ['amusement_park'],
+          },
+          {
+            id: 'ChIJtw',
+            displayName: { text: '台灣樂園' },
+            formattedAddress: '桃園市中壢區 Taiwan',
+            types: ['amusement_park'],
+          },
+        ],
+      }) as unknown as Response,
+    )
+
+    const results = await textSearch('樂園', mockEnv)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].place_id).toBe('ChIJtw')
+  })
 })
 
 // --- getPlaceDetails ---

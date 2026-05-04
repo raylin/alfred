@@ -93,4 +93,32 @@ describe('isSearchQuery', () => {
   it('returns false for place name without question indicators', () => {
     expect(isSearchQuery('兒童新樂園')).toBe(false)
   })
+
+  it('detects 幫我', () => {
+    expect(isSearchQuery('幫我找個室內景點')).toBe(true)
+  })
+
+  it('detects 找', () => {
+    expect(isSearchQuery('找個公園')).toBe(true)
+  })
+
+  it('detects 找一個', () => {
+    expect(isSearchQuery('找一個遊樂場')).toBe(true)
+  })
+
+  it('detects 有什麼', () => {
+    expect(isSearchQuery('台北有什麼好玩')).toBe(true)
+  })
+
+  it('detects 我想去', () => {
+    expect(isSearchQuery('我想去室內景點')).toBe(true)
+  })
+
+  it('detects 我要去', () => {
+    expect(isSearchQuery('我要去公園')).toBe(true)
+  })
+
+  it('detects 給我', () => {
+    expect(isSearchQuery('給我幾個台北景點')).toBe(true)
+  })
 })

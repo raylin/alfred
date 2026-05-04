@@ -1,3 +1,7 @@
+## 2026-05-04 — Task 12 complete: 5 acceptance-test fixes
+
+URL bypass router (ADR-014): pure URL messages skip LLM intent router, fixing IG URL → unknown bug. Search keyword expansion: added 幫我/找/找個/我想去/我要去/給我/有什麼 to isSearchQuery. Google Places locationBias (Taipei, 50km) + TW address safety net filters non-Taiwan results (ADR-015). resolveGooglePlace: Stories A/D/F now run Google Places textSearch after Claude extraction to get google_place_id + precise coords + dedup — supersedes ADR-010 (ADR-016). search-parser prompt updated to exclude meta-words from free_text_keywords. ADR-014/015/016 recorded. 246 tests pass (25 new). TypeScript clean. Awaiting acceptance + deploy.
+
 ## 2026-05-04 — Phase 0+1 complete: spec synced to v1.1
 
 All 12 tasks shipped and deployed to alfred.raylin.cc. Spec changelog (docs/spec-changelog.md) records CL-001 through CL-007; alfred-phase-0-1-spec.md updated to version 1.1 with all amendments applied. Phase 0+1 is closed. Next: Task 12 acceptance tests and Phase 1.5 planning.

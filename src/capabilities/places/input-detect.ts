@@ -14,7 +14,10 @@ export function detectInputType(text: string): InputType {
   return 'text'
 }
 
-const QUESTION_WORDS = ['嗎', '哪', '哪裡', '哪邊', '哪個', '怎麼', '什麼', '推薦', '有沒有']
+const QUESTION_WORDS = [
+  '嗎', '哪', '哪裡', '哪邊', '哪個', '怎麼', '什麼', '推薦', '有沒有',
+  '幫我', '找', '找個', '找一個', '有什麼', '給我', '我想去', '我要去',
+]
 
 export function isSearchQuery(text: string): boolean {
   if (text.includes('?') || text.includes('？')) return true

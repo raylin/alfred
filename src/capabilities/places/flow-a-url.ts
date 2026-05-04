@@ -3,8 +3,10 @@ import { stripHtml } from '../../lib/html-extract'
 import { extractFromHtml } from './extract'
 import { createPlace } from '../../integrations/notion'
 import { sendReply } from '../../integrations/line'
-import { buildDraftCard } from './flex-message'
+import { buildDraftCard, buildDedupCard } from './flex-message'
 import { writeRawExtraction, writeUserLastPlace } from './kv-store'
+import { checkDuplicate, writeDedupKV } from './duplicate-check'
+import { resolveGooglePlace } from './resolve-google-place'
 import { PlacesError } from './errors'
 import type { Env } from '../../core/env'
 
@@ -43,7 +45,28 @@ export async function runFlowA(
     throw new PlacesError('整理時遇到狀況，請再傳一次。如果一直失敗，可以直接在 Notion 手動建立。')
   }
 
-  // 4. Write to Notion
+  // 4. Resolve Google Place ID (best-effort — enables dedup + precise coords)
+  const resolved = await resolveGooglePlace(place, env)
+  if (resolved) {
+    place = {
+      ...place,
+      google_place_id: resolved.google_place_id,
+      latitude: resolved.lat,
+      longitude: resolved.lng,
+      address: resolved.address ?? place.address,
+    }
+  }
+
+  // 5. Duplicate check (only possible if we have a google_place_id)
+  if (place.google_place_id) {
+    const dedup = await checkDuplicate(place.google_place_id, env)
+    if (dedup.found) {
+      await sendReply(replyToken, [buildDedupCard(dedup.name)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
+      return
+    }
+  }
+
+  // 6. Write to Notion
   let notionResult
   try {
     notionResult = await createPlace(place, env)
@@ -53,7 +76,7 @@ export async function runFlowA(
     throw new PlacesError(`已經整理好了，但寫入 Notion 失敗。錯誤：${msg}`)
   }
 
-  // 5. Write to KV — best-effort, each write independent so one failure can't block the other
+  // 7. Write to KV — best-effort, each write independent so one failure can't block the other
   try {
     await writeRawExtraction(env, place.internal_id, {
       raw_input: url,
@@ -63,6 +86,13 @@ export async function runFlowA(
   } catch (err) {
     console.error('[flow-a] KV writeRawExtraction failed (non-fatal)', err)
   }
+  if (place.google_place_id) {
+    try {
+      await writeDedupKV(env, place.google_place_id, notionResult.notion_page_id, place.internal_id, place.name)
+    } catch (err) {
+      console.error('[flow-a] KV writeDedupKV failed (non-fatal)', err)
+    }
+  }
   if (userId !== undefined && chatId !== undefined) {
     try {
       await writeUserLastPlace(env, userId, place.internal_id, chatId)
@@ -71,7 +101,7 @@ export async function runFlowA(
     }
   }
 
-  // 6. Send Flex Message reply (chatId enables push fallback if reply token expired)
+  // 8. Send Flex Message reply (chatId enables push fallback if reply token expired)
   const fullPlace = { ...place, notion_url: notionResult.url, notion_page_id: notionResult.notion_page_id }
   await sendReply(replyToken, [buildDraftCard(fullPlace)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
 }
