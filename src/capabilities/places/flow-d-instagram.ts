@@ -6,7 +6,11 @@ import { buildDraftCard, buildDedupCard } from './flex-message'
 import { writeRawExtraction, writeUserLastPlace } from './kv-store'
 import { checkDuplicate, writeDedupKV } from './duplicate-check'
 import { resolveGooglePlace } from './resolve-google-place'
+import { getEffectiveOrigin } from './home-store'
+import { computeSingleRoute } from '../../integrations/routes-api'
+import type { RouteResult } from '../../integrations/routes-api'
 import { PlacesError } from './errors'
+import { logEvent } from '../../lib/observability'
 import type { Env } from '../../core/env'
 
 const FETCH_TIMEOUT_MS = 12_000
@@ -28,6 +32,8 @@ export async function runFlowD(
   userId?: string,
   chatId?: string,
 ): Promise<void> {
+  const t0 = Date.now()
+  try {
   // 1. Fetch IG page with facebookexternalhit UA to get OG tags
   let ogDescription = ''
   let rawHtml = ''
@@ -45,7 +51,7 @@ export async function runFlowD(
 
   // 2. If og:description too sparse, send fallback and return
   if (ogDescription.length < MIN_DESCRIPTION_LENGTH) {
-    console.log('[flow-d] IG description absent or too short — sending fallback', { url, len: ogDescription.length })
+    await logEvent(env, { type: 'places.add.instagram', user_id: userId, duration_ms: Date.now() - t0, outcome: 'unknown', error: 'ig_description_too_short' })
     await sendReply(replyToken, [{ type: 'text', text: IG_FALLBACK }], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
     return
   }
@@ -56,6 +62,7 @@ export async function runFlowD(
     place = await extractFromHtml(url, ogDescription, env)
   } catch (err) {
     console.error('[flow-d] extraction failed', { url, err })
+    await logEvent(env, { type: 'places.add.instagram', user_id: userId, duration_ms: Date.now() - t0, outcome: 'error', error: 'ig_extraction_failed' })
     await sendReply(replyToken, [{ type: 'text', text: IG_FALLBACK }], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
     return
   }
@@ -76,6 +83,7 @@ export async function runFlowD(
   if (place.google_place_id) {
     const dedup = await checkDuplicate(place.google_place_id, env)
     if (dedup.found) {
+      await logEvent(env, { type: 'places.dedup_hit', user_id: userId, duration_ms: Date.now() - t0, outcome: 'success', meta: { flow: 'instagram' } })
       await sendReply(replyToken, [buildDedupCard(dedup.name)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
       return
     }
@@ -116,7 +124,26 @@ export async function runFlowD(
     }
   }
 
-  // 8. Send Flex Message reply
+  // 8. Compute distance post-Notion-write (non-blocking — ADR-022)
   const fullPlace = { ...place, notion_url: notionResult.url, notion_page_id: notionResult.notion_page_id }
-  await sendReply(replyToken, [buildDraftCard(fullPlace)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
+  let distance: RouteResult | null = null
+  if (userId) {
+    try {
+      const origin = await getEffectiveOrigin(env, userId)
+      if (origin.source !== null && fullPlace.latitude != null && fullPlace.longitude != null) {
+        distance = await computeSingleRoute({ lat: origin.lat, lng: origin.lng }, { lat: fullPlace.latitude, lng: fullPlace.longitude }, env)
+      }
+    } catch (err) {
+      console.warn('[flow-d] distance computation failed (non-fatal)', err)
+    }
+  }
+
+  // 9. Send Flex Message reply
+  await sendReply(replyToken, [buildDraftCard(fullPlace, undefined, distance)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
+  await logEvent(env, { type: 'places.add.instagram', user_id: userId, duration_ms: Date.now() - t0, outcome: 'success' })
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message.slice(0, 100) : String(err).slice(0, 100)
+    await logEvent(env, { type: 'places.add.instagram', user_id: userId, duration_ms: Date.now() - t0, outcome: 'error', error: errorMsg })
+    throw err
+  }
 }

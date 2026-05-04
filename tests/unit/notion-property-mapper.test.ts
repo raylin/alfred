@@ -201,4 +201,51 @@ describe('buildNotionFilter', () => {
     expect(JSON.stringify(catCond)).toContain('公園')
     expect(JSON.stringify(catCond)).toContain('步道')
   })
+
+  it('never_visited — OR(is_empty, equals 0) on Visit Count', () => {
+    const filter = buildNotionFilter({ visit_state: 'never_visited' }) as { and: unknown[] }
+    const cond = filter.and.find((c: unknown) => JSON.stringify(c).includes(N.visit_count))
+    const s = JSON.stringify(cond)
+    expect(s).toContain('"or"')
+    expect(s).toContain('is_empty')
+    expect(s).toContain('"equals":0')
+  })
+
+  it('visited_recently — Last Visited on_or_after 30 days ago', () => {
+    const filter = buildNotionFilter({ visit_state: 'visited_recently' }) as { and: unknown[] }
+    const cond = filter.and.find((c: unknown) => JSON.stringify(c).includes(N.last_visited))
+    const s = JSON.stringify(cond)
+    expect(s).toContain('on_or_after')
+    // date should be in the past (YYYY-MM-DD)
+    expect(s).toMatch(/\d{4}-\d{2}-\d{2}/)
+  })
+
+  it('visited_long_ago — Last Visited on_or_before 180 days ago + Visit Count > 0', () => {
+    const filter = buildNotionFilter({ visit_state: 'visited_long_ago' }) as { and: unknown[] }
+    const s = JSON.stringify(filter)
+    expect(s).toContain('on_or_before')
+    expect(s).toContain('"greater_than":0')
+    expect(s).toContain(N.last_visited)
+    expect(s).toContain(N.visit_count)
+  })
+
+  it('highly_rated — Avg Rating >= 4.5 + Visit Count >= 1', () => {
+    const filter = buildNotionFilter({ visit_state: 'highly_rated' }) as { and: unknown[] }
+    const s = JSON.stringify(filter)
+    expect(s).toContain('greater_than_or_equal_to')
+    expect(s).toContain('4.5')
+    expect(s).toContain(N.avg_rating)
+    expect(s).toContain(N.visit_count)
+  })
+
+  it('loved_recently does not add conditions (handled by searchLovedRecentlyPlaces)', () => {
+    const filter = buildNotionFilter({ visit_state: 'loved_recently' })
+    // Only the status condition should be present
+    expect(filter).toEqual({ property: N.status, status: { does_not_equal: 'archived' } })
+  })
+
+  it('null visit_state adds no conditions', () => {
+    const filter = buildNotionFilter({ visit_state: null })
+    expect(filter).toEqual({ property: N.status, status: { does_not_equal: 'archived' } })
+  })
 })

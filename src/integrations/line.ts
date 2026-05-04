@@ -9,8 +9,20 @@ export type LineSource =
 
 export type LineTextMessageContent = { type: 'text'; id: string; text: string }
 export type LineImageMessageContent = { type: 'image'; id: string }
+export type LineLocationMessageContent = {
+  type: 'location'
+  id: string
+  title: string    // place label; may be empty string when sharing current location
+  address: string
+  latitude: number
+  longitude: number
+}
 type LineOtherMessageContent = { type: string; id: string }
-type LineMessageContent = LineTextMessageContent | LineImageMessageContent | LineOtherMessageContent
+type LineMessageContent =
+  | LineTextMessageContent
+  | LineImageMessageContent
+  | LineLocationMessageContent
+  | LineOtherMessageContent
 
 export function isTextMessage(msg: LineMessageContent): msg is LineTextMessageContent {
   return msg.type === 'text'
@@ -18,6 +30,10 @@ export function isTextMessage(msg: LineMessageContent): msg is LineTextMessageCo
 
 export function isImageMessage(msg: LineMessageContent): msg is LineImageMessageContent {
   return msg.type === 'image'
+}
+
+export function isLocationMessage(msg: LineMessageContent): msg is LineLocationMessageContent {
+  return msg.type === 'location'
 }
 
 export type LineMessageEvent = {

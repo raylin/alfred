@@ -25,6 +25,7 @@ function makeRaw(overrides: Partial<{
   fee_type: string | null
   energy_level: string | null
   free_text_keywords: string[]
+  visit_state: string | null
 }> = {}) {
   return {
     filters: {
@@ -36,6 +37,7 @@ function makeRaw(overrides: Partial<{
       fee_type: null,
       energy_level: null,
       free_text_keywords: [],
+      visit_state: null,
       ...overrides,
     },
     query_intent_summary: '測試搜尋',
@@ -119,5 +121,66 @@ describe('parseSearchIntent', () => {
     // Prompt instructs: do NOT put meta-words like 附近/推薦/幫我/找 in free_text_keywords
     // When Haiku follows the prompt, free_text_keywords should be empty for this query
     expect(result.filters.free_text_keywords).toEqual([])
+  })
+
+  it('defaults visit_state to null when not in response', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ region: '台北' }))
+    const result = await parseSearchIntent('台北公園', mockEnv)
+    expect(result.filters.visit_state).toBeNull()
+  })
+})
+
+describe('parseSearchIntent — visit_state', () => {
+  it('parses never_visited', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'never_visited', region: '台北' }))
+    const result = await parseSearchIntent('沒去過的台北景點', mockEnv)
+    expect(result.filters.visit_state).toBe('never_visited')
+    expect(result.filters.region).toBe('台北')
+  })
+
+  it('parses visited_recently', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'visited_recently' }))
+    const result = await parseSearchIntent('最近去過的', mockEnv)
+    expect(result.filters.visit_state).toBe('visited_recently')
+  })
+
+  it('parses visited_long_ago', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'visited_long_ago' }))
+    const result = await parseSearchIntent('很久沒去的常勝軍', mockEnv)
+    expect(result.filters.visit_state).toBe('visited_long_ago')
+  })
+
+  it('parses loved_recently', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'loved_recently' }))
+    const result = await parseSearchIntent('上次很愛的', mockEnv)
+    expect(result.filters.visit_state).toBe('loved_recently')
+  })
+
+  it('parses highly_rated', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'highly_rated' }))
+    const result = await parseSearchIntent('評分高的', mockEnv)
+    expect(result.filters.visit_state).toBe('highly_rated')
+  })
+
+  it('rejects invalid visit_state value and returns null', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'made_up_value' }))
+    const result = await parseSearchIntent('...', mockEnv)
+    expect(result.filters.visit_state).toBeNull()
+  })
+
+  it('pure attribute search produces null visit_state', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ indoor_outdoor: '室內', age: 3 }))
+    const result = await parseSearchIntent('下雨天三歲適合的景點', mockEnv)
+    expect(result.filters.visit_state).toBeNull()
+    expect(result.filters.indoor_outdoor).toBe('室內')
+    expect(result.filters.age).toBe(3)
+  })
+
+  it('visit_state and other filters can coexist', async () => {
+    mockChatJson.mockResolvedValue(makeRaw({ visit_state: 'never_visited', region: '新北', categories: ['公園'] }))
+    const result = await parseSearchIntent('新北沒去過的公園', mockEnv)
+    expect(result.filters.visit_state).toBe('never_visited')
+    expect(result.filters.region).toBe('新北')
+    expect(result.filters.categories).toEqual(['公園'])
   })
 })

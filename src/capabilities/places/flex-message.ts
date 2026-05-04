@@ -1,4 +1,6 @@
 import type { LineFlexMessage } from '../../integrations/line'
+import type { RouteResult } from '../../integrations/routes-api'
+import { formatRouteRow } from '../../lib/distance-format'
 import type { Place } from './schema'
 
 type FlexComponent = Record<string, unknown>
@@ -27,7 +29,7 @@ function inferred(place: Place, ...fields: string[]): boolean {
   return fields.some(f => place.ai_inferred_fields.includes(f))
 }
 
-export function buildDraftCard(place: Place, note?: string): LineFlexMessage {
+export function buildDraftCard(place: Place, note?: string, distance?: RouteResult | null): LineFlexMessage {
   // Header subtitle
   const subtitleParts: string[] = [...place.categories]
   if (place.indoor_outdoor) subtitleParts.push(place.indoor_outdoor)
@@ -101,6 +103,15 @@ export function buildDraftCard(place: Place, note?: string): LineFlexMessage {
     bodyContents.push(textRow('簡述', place.summary, inferred(place, 'Summary')))
   }
 
+  // Distance row (optional — added post-Notion write, ADR-022)
+  if (distance) {
+    const rowText = formatRouteRow(distance)
+    if (rowText) {
+      bodyContents.push({ type: 'separator', margin: 'sm' })
+      bodyContents.push({ type: 'text', text: rowText, size: 'sm', color: '#555555', wrap: true })
+    }
+  }
+
   const notionUri = place.notion_url ?? `https://www.notion.so/${place.notion_page_id ?? ''}`
 
   return {
@@ -172,7 +183,7 @@ export function buildDedupCard(name: string): LineFlexMessage {
   }
 }
 
-function buildSearchBubble(place: Place): Record<string, unknown> {
+function buildSearchBubble(place: Place, distance?: RouteResult | null): Record<string, unknown> {
   const metaParts: string[] = []
   if (place.categories.length > 0) metaParts.push(place.categories[0])
   if (place.region) metaParts.push(place.region)
@@ -216,6 +227,9 @@ function buildSearchBubble(place: Place): Record<string, unknown> {
     })
   }
 
+  // Distance row (optional)
+  const distanceRowText = distance ? formatRouteRow(distance) : ''
+
   const notionUri = place.notion_url ?? `https://www.notion.so/${place.notion_page_id ?? ''}`
 
   return {
@@ -232,6 +246,7 @@ function buildSearchBubble(place: Place): Record<string, unknown> {
           ? [{ type: 'text', text: metaParts.join(' · '), size: 'xs', color: '#888888', wrap: true }]
           : []),
         ...(bodyContents.length > 0 ? [{ type: 'separator', margin: 'sm' }, ...bodyContents] : []),
+        ...(distanceRowText ? [{ type: 'separator', margin: 'sm' }, { type: 'text', text: distanceRowText, size: 'xs', color: '#555555', wrap: true }] : []),
       ],
     },
     footer: {
@@ -250,13 +265,115 @@ function buildSearchBubble(place: Place): Record<string, unknown> {
   }
 }
 
-export function buildSearchCarousel(places: Place[]): LineFlexMessage {
+export function buildVisitCard(
+  placeName: string,
+  visitedOn: string,
+  notes: string | null,
+  rating: number | null,
+  askForRating: boolean,
+): LineFlexMessage {
+  const bodyContents: FlexComponent[] = [
+    { type: 'text', text: '✅ 已記錄造訪', color: '#27AE60', size: 'sm' },
+    { type: 'text', text: placeName, weight: 'bold', size: 'lg', wrap: true, color: '#111111', margin: 'xs' },
+    { type: 'text', text: visitedOn, size: 'sm', color: '#888888' },
+  ]
+
+  if (notes) {
+    bodyContents.push({ type: 'separator', margin: 'sm' })
+    bodyContents.push({ type: 'text', text: notes, size: 'sm', color: '#555555', wrap: true })
+  }
+
+  if (rating != null) {
+    bodyContents.push({
+      type: 'text',
+      text: `${'⭐'.repeat(rating)} ${rating} / 5`,
+      size: 'sm',
+      color: '#F39C12',
+      margin: 'sm',
+    })
+  }
+
+  if (askForRating) {
+    bodyContents.push({ type: 'separator', margin: 'sm' })
+    bodyContents.push({
+      type: 'text',
+      text: '想給幾顆星嗎？(回傳 1-5，或傳「跳過」)',
+      size: 'sm',
+      color: '#888888',
+      wrap: true,
+      margin: 'xs',
+    })
+  }
+
+  return {
+    type: 'flex',
+    altText: `已記錄造訪：${placeName}`,
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: 'md',
+        spacing: 'xs',
+        contents: bodyContents,
+      },
+    },
+  }
+}
+
+export function buildSearchCarousel(places: Place[], distances?: (RouteResult | null)[]): LineFlexMessage {
   return {
     type: 'flex',
     altText: `找到 ${places.length} 個地點`,
     contents: {
       type: 'carousel',
-      contents: places.map(buildSearchBubble),
+      contents: places.map((p, i) => buildSearchBubble(p, distances?.[i])),
+    },
+  }
+}
+
+export function buildDeleteConfirmCard(
+  placeName: string,
+  notionPageId: string,
+  visitCount: number,
+): LineFlexMessage {
+  const visitNote = visitCount > 0
+    ? { type: 'text', text: `⚠️ 會一併失去 ${visitCount} 筆造訪記錄`, size: 'sm', color: '#888888', wrap: true }
+    : { type: 'text', text: '尚無造訪記錄', size: 'sm', color: '#888888' }
+
+  return {
+    type: 'flex',
+    altText: `刪除「${placeName}」？`,
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: 'md',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: `刪除「${placeName}」？`, weight: 'bold', size: 'md', color: '#111111' },
+          visitNote,
+          { type: 'separator', margin: 'sm' },
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#E53E3E',
+            height: 'sm',
+            margin: 'sm',
+            action: { type: 'postback', label: '確認刪除', data: `delete:confirm:${notionPageId}` },
+          },
+          {
+            type: 'button',
+            style: 'secondary',
+            height: 'sm',
+            margin: 'sm',
+            action: { type: 'postback', label: '取消', data: `delete:cancel:${notionPageId}` },
+          },
+        ],
+      },
     },
   }
 }

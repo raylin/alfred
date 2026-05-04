@@ -1,3 +1,43 @@
+## 2026-05-04 — Phase 1.5 完工
+
+Alfred Phase 1.5「Quality & Trust」全部 12 個 task 完工（M0/M1/M2 migration runner + Task 13/14/15/16/17/18/19/20/21）。Unit test suite 從 Phase 0+1 的 246 筆擴展到 505 筆。新增能力：Visit Tracking（Story H）、Conversational Edit（I/J）、Delete（K）、Search by Visit State（L）、Distance/Transit（M）、Home Setup（N）、Observability（/review PM dashboard）。架構決策 ADR-017 到 ADR-035，spec 升至 v1.1。Closeout commit 已 push。下一步：老婆試用反饋收集後進 Phase 2 規劃（食譜 / 採買 / 家庭資訊）。
+
+## 2026-05-04 — Task 19 complete: Observability
+
+Created `src/lib/ulid.ts` (Crockford base32 ULID generator using Web Crypto) and `src/lib/observability.ts` (`logEvent` writes `event:{ulid}` with 7-day TTL + prepends to `events:recent` ring buffer capped at 100). Instrumented 10 flows: replaced console.log in `places-intent-classifier.ts` (→ `places.intent_classify`/`places.intent_unknown`) and `flow-e-search.ts` (→ `places.search`); added outer try/catch logEvent to flow-a/b/c/d/image (→ `places.add.*` + `places.dedup_hit`); added logEvent to `performEdit`/`doDelete`/`recordVisitAndReply`. Added `/review` slash command (PM-only; reads ring buffer → parallel-fetches events → type counts / outcome % / avg+p95 duration / error list / unknown intent sample; truncates at 4500 chars). ADRs 033-035. 18 new tests; suite: 505 passed. Awaiting acceptance.
+
+## 2026-05-04 — Task 20 complete: Search by Visit State (Story L)
+
+`schema.ts` gains `VisitState` type + `visit_count`/`last_visited`/`avg_rating` in `N` + `visit_state?: VisitState | null` in `SearchFilters`. `search-parser.ts` prompt extended with visit_state rules + `sanitizeVisitState` guard. `buildNotionFilter` in `notion.ts` handles `never_visited`/`visited_recently`/`visited_long_ago`/`highly_rated` as filter conditions. `searchPlaces` branches to `searchLovedRecentlyPlaces` for `loved_recently` (two-phase: Visits DB → place IDs → in-memory filter). ADR-032 (two-phase loved_recently). 22 new tests (8 search-parser + 8 notion-property-mapper + 7 search-visit-state + -1 refactor); suite: 487 passed. Awaiting acceptance.
+
+## 2026-05-04 — Task 16 complete: Conversational Delete (Story K)
+
+`delete-parser.ts` (`parseDeleteIntent` → `{ target: 'last' | string | null }`, Sonnet, retry-once). `flow-delete.ts` (`runFlowDelete` + `runFlowDeleteSelect` + `runFlowDeleteConfirm` + `runFlowDeleteCancel`). `flex-message.ts` gains `buildDeleteConfirmCard` (name + visit_count + confirm/cancel buttons). `disambiguate.ts` extended to `'visit' | 'edit' | 'delete'` action types. `notion.ts` gains `archivePlace` (PATCH `{ archived: true }`). `handler.ts` wires `delete` intent to `runFlowDelete`. `index.ts` routes `delete:select:` / `delete:confirm:` / `delete:cancel:` postbacks. ADR-029 (two-tier confirmation: no confirm for last-anchor, confirm for named). ADR-030 (archive not hard-delete; dedup KV + last_place KV cleanup; visits preserved). ADR-031 (no pending_delete KV needed). 33 new tests (12 delete-parser + 21 flow-delete); suite: 465 passed. Awaiting acceptance.
+
+## 2026-05-04 — Task 15 complete: Conversational Edit (Story I + J)
+
+`edit-parser.ts` (`parseEditIntent` + `parseEditTarget`, Sonnet, retry-once). `apply-edit.ts` (`applyEdits` single-PATCH strategy, `summarizeOp`). `flow-edit.ts` (`runFlowEdit` + `runFlowEditSelect`). `schema.ts` gains `EditOp` union. `disambiguate.ts` extended to support `'edit'` action type. `kv-store.ts` gains `pending_edit` KV helpers (TTL 10 min). `notion.ts` gains `patchPageProperties` general-purpose PATCH. `handler.ts` wires `edit` intent to `runFlowEdit`. `index.ts` routes `edit:select:` postback to `runFlowEditSelect`. ADR-027 (single PATCH for all valid ops), ADR-028 (rename soft-rejected via ApplyResult). 53 new tests (14 edit-parser + 23 apply-edit + 16 flow-edit); suite: 432 passed. Awaiting acceptance.
+
+## 2026-05-04 — Task 14 complete: Visit Tracking
+
+`visit-parser.ts` (Sonnet, retry-once, null-field fallback). `visit-summary.ts` (query Visits DB → patch Place summary, non-fatal). `disambiguate.ts` (`buildDisambiguateCard`, postback `visit:select:{notion_page_id}`). `flow-visit.ts` (`runFlowVisit` + `runFlowVisitSelect`). `notion.ts` gains `createVisit`, `queryVisitsForPlace`, `patchVisitRating`, `patchPlaceSummary`, `getPlaceByNotionPageId`, `findPlaceByInternalId`. `kv-store.ts` gains `pending_rating` + `pending_visit` KV helpers (TTL 10 min each). `handler.ts` adds pending_rating intercept (1-5 → patch rating; 「跳過」→ clear) and replaces visit stub with `runFlowVisit`. `index.ts` routes `visit:select:` postback to `runFlowVisitSelect`. ADR-025 (pending_visit KV for disambiguation context), ADR-026 (notion_page_id in postback). 53 new tests; suite: 379 passed. Awaiting acceptance.
+
+## 2026-05-04 — Task 13 complete: Within-Places Intent Classifier
+
+`src/core/places-intent-classifier.ts` added (Haiku LLM, 7-intent enum, context-aware, confidence threshold 0.6, safe default on failure). `handler.ts` text dispatch replaced: removed `isSearchQuery`, added `readPlacesContext` (5-min KV window), switch on classifier output (add/search→flows, edit/delete/visit→stubs, setup→guidance, unknown→handler). `input-detect.ts` cleaned: `isSearchQuery` + `QUESTION_WORDS` removed (ADR-024). 18 new tests; -15 isSearchQuery tests; suite: 326 passed. ADR-024 recorded. Awaiting acceptance.
+
+## 2026-05-04 — Task 17 complete: Distance / Transit Display
+
+`src/integrations/routes-api.ts` added: `computeRouteMatrix` (batch, KV cache 24h) + `computeSingleRoute`. `src/lib/distance-format.ts` added: `formatMinutes` + `formatRouteRow`. `src/capabilities/places/flex-message.ts`: `buildDraftCard` + `buildSearchCarousel` gain optional `distance` param. All 5 add flows (A/B/C/D/image) compute distance post-Notion-write (ADR-022). `flow-e-search.ts` gains `userId` param, batch route matrix, distance tie-breaking (ADR-023). `handler.ts` passes `userId` to `runFlowE`. 36 new tests; suite: 323 passed. ADR-022 + ADR-023 recorded. Awaiting acceptance.
+
+## 2026-05-04 — Task 18 amendment complete: flag-based home update mechanism
+
+`markHomeUpdatePending` / `isHomeUpdatePending` / `consumeHomeUpdatePending` added to `home-store.ts` (KV flag TTL 5 min). `/setup` with existing home now sets the flag + replies with 5-minute update prompt. `runFlowSetup` checks `consumeHomeUpdatePending` first; if flag set, location updates home instead of setting current_origin. 7 new tests; suite: 287 passed. ADR-021 recorded. Awaiting user acceptance before Task 17.
+
+## 2026-05-04 — Task 18 complete: Home Setup Flow
+
+`src/integrations/line.ts` adds `LineLocationMessageContent` + `isLocationMessage`. `src/integrations/notion.ts` adds `SettingsRow`, `getSettingsByLineUserId`, `upsertSettings`. `src/capabilities/places/home-store.ts` created with 8 exported functions (KV layer for home/current_origin/prompted). `src/capabilities/places/flow-setup.ts` implements ADR-020 (first location = home, subsequent = 2h origin override). `src/core/slash-commands.ts` adds `/setup`, `/home`, `/here`. `src/index.ts` wires first-time home guidance and location message routing. 26 new unit tests; suite: 280 passed. ADR-020 recorded. Awaiting user acceptance.
+
 ## 2026-05-04 — Task M2 complete: Visits + Settings DBs created
 
 `scripts/migrations/002-create-visits-db.ts` (7 properties, Place relation to Place DB) and `003-create-settings-db.ts` (6 properties) created via `ensureDatabase` helper. `src/lib/visit-title.ts` adds `formatVisitTitle`. `src/integrations/notion.ts` gains `discoverDbIds` (KV cache + Notion parent-page scan, ADR-019). `src/core/env.ts` adds `NOTION_PARENT_PAGE_ID`. 8 new tests (254 total). All 6 acceptance tests passed live. Notion: Visits + Settings DBs visible with correct schemas; Place relation verified. `scripts/verify-db-discovery.ts` confirms all 3 DBs discoverable. Migration phase complete; next: Task 18 (Home Setup).

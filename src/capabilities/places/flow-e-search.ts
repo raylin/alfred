@@ -2,7 +2,11 @@ import { parseSearchIntent } from './search-parser'
 import { searchPlaces } from '../../integrations/notion'
 import { sendReply } from '../../integrations/line'
 import { buildSearchCarousel } from './flex-message'
+import { getEffectiveOrigin } from './home-store'
+import { computeRouteMatrix } from '../../integrations/routes-api'
+import type { RouteResult } from '../../integrations/routes-api'
 import { PlacesError } from './errors'
+import { logEvent } from '../../lib/observability'
 import type { Place } from './schema'
 import type { Env } from '../../core/env'
 
@@ -26,11 +30,20 @@ function sortByKeywords(places: Place[], keywords: string[]): Place[] {
   return [...places].sort((a, b) => scorePlace(b, keywords) - scorePlace(a, keywords))
 }
 
+function drivingMinutes(r: RouteResult | null): number {
+  if (r?.driving) return r.driving.duration_minutes
+  if (r?.transit) return r.transit.duration_minutes
+  return Infinity
+}
+
 export async function runFlowE(
   input: string,
   replyToken: string,
   env: Env,
+  userId?: string,
 ): Promise<void> {
+  const t0 = Date.now()
+
   // 1. Parse intent with Claude Haiku
   let intent
   try {
@@ -39,13 +52,6 @@ export async function runFlowE(
     console.error('[flow-e] search-parser failed', { input, err })
     throw new PlacesError('解析搜尋條件時遇到問題，請換個方式描述看看。')
   }
-
-  console.log(JSON.stringify({
-    type: 'search_query',
-    raw_input: input,
-    parsed_filters: intent.filters,
-    query_intent_summary: intent.query_intent_summary,
-  }))
 
   // 2. Query Notion (fetch up to FETCH_LIMIT to detect ">10 candidates")
   let candidates: Place[]
@@ -56,11 +62,15 @@ export async function runFlowE(
     throw new PlacesError('搜尋時遇到狀況，請再試一次。')
   }
 
-  console.log(JSON.stringify({
-    type: 'search_result',
-    candidate_count: candidates.length,
-    query_intent_summary: intent.query_intent_summary,
-  }))
+  await logEvent(env, {
+    type: 'places.search',
+    user_id: userId,
+    filters: intent.filters as object,
+    result_count: candidates.length,
+    duration_ms: Date.now() - t0,
+    outcome: 'success',
+    meta: { query_intent_summary: intent.query_intent_summary },
+  })
 
   // 3. In-memory keyword re-ranking
   const keywords = intent.filters.free_text_keywords ?? []
@@ -76,19 +86,61 @@ export async function runFlowE(
     return
   }
 
-  // 5. Build reply messages
+  // 5. Take top candidates and compute distances for tie-breaking + display (ADR-022, ADR-023)
   const tooMany = ranked.length > NARROW_THRESHOLD
   const top = ranked.slice(0, DISPLAY_LIMIT)
 
+  let distances: (RouteResult | null)[] = top.map(() => null)
+  if (userId) {
+    try {
+      const origin = await getEffectiveOrigin(env, userId)
+      if (origin.source !== null) {
+        const destinations = top.map(p =>
+          p.latitude != null && p.longitude != null
+            ? { lat: p.latitude, lng: p.longitude }
+            : null,
+        )
+        const validEntries = destinations
+          .map((d, i) => ({ d, i }))
+          .filter((x): x is { d: { lat: number; lng: number }; i: number } => x.d !== null)
+
+        if (validEntries.length > 0) {
+          const results = await computeRouteMatrix(
+            { lat: origin.lat, lng: origin.lng },
+            validEntries.map(x => x.d),
+            env,
+          )
+          validEntries.forEach(({ i }, j) => { distances[i] = results[j] ?? null })
+        }
+      }
+    } catch (err) {
+      console.warn('[flow-e] distance computation failed (non-fatal)', err)
+    }
+  }
+
+  // 6. Re-sort top 5: primary = keyword score, secondary = driving distance (ADR-023)
+  const topWithMeta = top.map((p, i) => ({
+    place: p,
+    distance: distances[i],
+    score: scorePlace(p, keywords),
+  }))
+  topWithMeta.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return drivingMinutes(a.distance) - drivingMinutes(b.distance)
+  })
+  const finalTop = topWithMeta.map(x => x.place)
+  const finalDistances = topWithMeta.map(x => x.distance)
+
+  // 7. Build reply messages
   const headerText = tooMany
-    ? `找到很多筆，以下是最相關的 ${top.length} 個，可以加條件縮小範圍。`
+    ? `找到很多筆，以下是最相關的 ${finalTop.length} 個，可以加條件縮小範圍。`
     : `找到 ${ranked.length} 個符合「${intent.query_intent_summary}」的地點：`
 
   await sendReply(
     replyToken,
     [
       { type: 'text', text: headerText },
-      buildSearchCarousel(top),
+      buildSearchCarousel(finalTop, finalDistances),
     ],
     env.LINE_CHANNEL_ACCESS_TOKEN,
   )

@@ -1,5 +1,6 @@
 import type { Env } from '../core/env'
 import { N, type Place, type SearchFilters } from '../capabilities/places/schema'
+import { formatVisitTitle } from '../lib/visit-title'
 
 const NOTION_API = 'https://api.notion.com/v1'
 const NOTION_VERSION = '2022-06-28'
@@ -43,6 +44,18 @@ function headers(token: string): Record<string, string> {
   }
 }
 
+async function notionGet<T>(path: string, token: string): Promise<T> {
+  const res = await fetch(`${NOTION_API}${path}`, {
+    method: 'GET',
+    headers: headers(token),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Notion ${res.status} GET ${path}: ${text}`)
+  }
+  return res.json() as Promise<T>
+}
+
 async function notionPost<T>(path: string, body: unknown, token: string): Promise<T> {
   const res = await fetch(`${NOTION_API}${path}`, {
     method: 'POST',
@@ -51,7 +64,20 @@ async function notionPost<T>(path: string, body: unknown, token: string): Promis
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`Notion ${res.status} ${path}: ${text}`)
+    throw new Error(`Notion ${res.status} POST ${path}: ${text}`)
+  }
+  return res.json() as Promise<T>
+}
+
+async function notionPatch<T>(path: string, body: unknown, token: string): Promise<T> {
+  const res = await fetch(`${NOTION_API}${path}`, {
+    method: 'PATCH',
+    headers: headers(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Notion ${res.status} PATCH ${path}: ${text}`)
   }
   return res.json() as Promise<T>
 }
@@ -180,6 +206,12 @@ function and(conditions: Filter[]): Filter {
   return conditions.length === 1 ? conditions[0] : { and: conditions }
 }
 
+function daysAgo(n: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - n)
+  return d.toISOString().slice(0, 10)
+}
+
 function orFilters(property: string, type: string, key: string, values: string[]): Filter {
   if (values.length === 1) return { property, [type]: { [key]: values[0] } }
   return { or: values.map(v => ({ property, [type]: { [key]: v } })) }
@@ -236,6 +268,35 @@ export function buildNotionFilter(filters: SearchFilters): Filter {
     }
   }
 
+  if (filters.visit_state === 'never_visited') {
+    conditions.push({
+      or: [
+        { property: N.visit_count, number: { is_empty: true } },
+        { property: N.visit_count, number: { equals: 0 } },
+      ],
+    })
+  }
+
+  if (filters.visit_state === 'visited_recently') {
+    conditions.push({ property: N.last_visited, date: { on_or_after: daysAgo(30) } })
+  }
+
+  if (filters.visit_state === 'visited_long_ago') {
+    conditions.push(
+      { property: N.last_visited, date: { on_or_before: daysAgo(180) } },
+      { property: N.visit_count, number: { greater_than: 0 } },
+    )
+  }
+
+  if (filters.visit_state === 'highly_rated') {
+    conditions.push(
+      { property: N.avg_rating, number: { greater_than_or_equal_to: 4.5 } },
+      { property: N.visit_count, number: { greater_than_or_equal_to: 1 } },
+    )
+  }
+
+  // loved_recently is resolved in searchLovedRecentlyPlaces; not a filter condition here
+
   return and(conditions)
 }
 
@@ -282,6 +343,10 @@ export async function searchPlaces(
   env: Env,
   limit = 5,
 ): Promise<Place[]> {
+  if (filters.visit_state === 'loved_recently') {
+    return searchLovedRecentlyPlaces(filters, env, limit)
+  }
+
   const res = await notionPost<NotionQueryResponse>(
     `/databases/${env.NOTION_DB_ID}/query`,
     {
@@ -292,6 +357,129 @@ export async function searchPlaces(
     env.NOTION_TOKEN,
   )
   return res.results.map(notionPageToPlace)
+}
+
+async function searchLovedRecentlyPlaces(
+  filters: SearchFilters,
+  env: Env,
+  limit: number,
+): Promise<Place[]> {
+  // Step 1: find place IDs with Rating=5 in last 30 days from Visits DB
+  const { visits: visitsDbId } = await discoverDbIds(env)
+  const visitRes = await notionPost<NotionQueryResponse>(
+    `/databases/${visitsDbId}/query`,
+    {
+      filter: {
+        and: [
+          { property: 'Rating', number: { equals: 5 } },
+          { property: 'Visited On', date: { on_or_after: daysAgo(30) } },
+        ],
+      },
+      page_size: 50,
+    },
+    env.NOTION_TOKEN,
+  )
+
+  const lovedIds = new Set<string>()
+  for (const v of visitRes.results) {
+    const rel = (v.properties['Place'] as unknown as { relation?: Array<{ id: string }> })?.relation
+    if (rel?.[0]?.id) lovedIds.add(rel[0].id)
+  }
+
+  if (lovedIds.size === 0) return []
+
+  // Step 2: query Places DB with other filters (visit_state cleared)
+  const otherFilters: SearchFilters = { ...filters, visit_state: null }
+  const res = await notionPost<NotionQueryResponse>(
+    `/databases/${env.NOTION_DB_ID}/query`,
+    {
+      filter: buildNotionFilter(otherFilters),
+      sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }],
+      page_size: Math.max(limit * 4, 20),
+    },
+    env.NOTION_TOKEN,
+  )
+
+  // Step 3: in-memory filter to loved places only
+  return res.results
+    .map(notionPageToPlace)
+    .filter(p => p.notion_page_id != null && lovedIds.has(p.notion_page_id))
+    .slice(0, limit)
+}
+
+// --- Settings DB ---
+
+export type SettingsRow = {
+  notion_page_id: string
+  line_user_id: string
+  display_name: string | null
+  home_address: string | null
+  home_lat: number | null
+  home_lng: number | null
+  configured_at: string | null  // YYYY-MM-DD
+}
+
+function notionPageToSettings(page: NotionPage): SettingsRow {
+  const prop = page.properties
+  return {
+    notion_page_id: page.id,
+    line_user_id: prop['Name']?.title?.[0]?.plain_text ?? '',
+    display_name: prop['Display Name']?.rich_text?.[0]?.plain_text ?? null,
+    home_address: prop['Home Address']?.rich_text?.[0]?.plain_text ?? null,
+    home_lat: prop['Home Lat']?.number ?? null,
+    home_lng: prop['Home Lng']?.number ?? null,
+    configured_at: (prop['Configured At'] as unknown as { date?: { start: string } | null })?.date?.start ?? null,
+  }
+}
+
+function settingsToProperties(row: Omit<SettingsRow, 'notion_page_id'>): Record<string, unknown> {
+  const p: Record<string, unknown> = {
+    Name: { title: rt(row.line_user_id) },
+  }
+  if (row.display_name != null)  p['Display Name']  = { rich_text: rt(row.display_name) }
+  if (row.home_address != null)  p['Home Address']  = { rich_text: rt(row.home_address) }
+  if (row.home_lat != null)      p['Home Lat']      = { number: row.home_lat }
+  if (row.home_lng != null)      p['Home Lng']      = { number: row.home_lng }
+  if (row.configured_at != null) p['Configured At'] = { date: { start: row.configured_at } }
+  return p
+}
+
+export async function getSettingsByLineUserId(
+  env: Env,
+  userId: string,
+): Promise<SettingsRow | null> {
+  const { settings: settingsDbId } = await discoverDbIds(env)
+  const res = await notionPost<NotionQueryResponse>(
+    `/databases/${settingsDbId}/query`,
+    { filter: { property: 'Name', title: { equals: userId } }, page_size: 1 },
+    env.NOTION_TOKEN,
+  )
+  if (res.results.length === 0) return null
+  return notionPageToSettings(res.results[0])
+}
+
+export async function upsertSettings(
+  env: Env,
+  row: Omit<SettingsRow, 'notion_page_id'>,
+): Promise<SettingsRow> {
+  const { settings: settingsDbId } = await discoverDbIds(env)
+  const existing = await getSettingsByLineUserId(env, row.line_user_id)
+
+  if (existing) {
+    const updated = await notionPatch<NotionPage>(
+      `/pages/${existing.notion_page_id}`,
+      { properties: settingsToProperties(row) },
+      env.NOTION_TOKEN,
+    )
+    return notionPageToSettings(updated)
+  }
+
+  const created = await notionPost<NotionPage>(
+    '/pages',
+    { parent: { database_id: settingsDbId }, properties: settingsToProperties(row) },
+    env.NOTION_TOKEN,
+  )
+  return notionPageToSettings(created)
 }
 
 // --- DB discovery (ADR-019) ---
@@ -357,4 +545,160 @@ export async function discoverDbIds(env: Env): Promise<DbIds> {
     expirationTtl: DB_IDS_TTL_SECONDS,
   })
   return ids
+}
+
+// --- Visits DB ---
+
+export type VisitRow = {
+  place_notion_page_id: string
+  place_name: string
+  visited_on: string | null  // YYYY-MM-DD; defaults to today
+  rating: number | null
+  notes: string | null
+  logged_by: string | null
+}
+
+export type VisitSummaryData = {
+  last_visited: string | null  // YYYY-MM-DD
+  visit_count: number
+  avg_rating: number | null
+}
+
+export async function createVisit(
+  row: VisitRow,
+  env: Env,
+): Promise<{ notion_page_id: string }> {
+  const { visits: visitsDbId } = await discoverDbIds(env)
+  const date = row.visited_on ?? new Date().toISOString().slice(0, 10)
+  const title = formatVisitTitle(row.place_name, date)
+
+  const properties: Record<string, unknown> = {
+    'Title': { title: rt(title) },
+    'Place': { relation: [{ id: row.place_notion_page_id }] },
+    'Visited On': { date: { start: date } },
+  }
+  if (row.rating != null) properties['Rating'] = { number: row.rating }
+  if (row.notes != null) properties['Notes'] = { rich_text: rt(row.notes) }
+  if (row.logged_by != null) properties['Logged By'] = { rich_text: rt(row.logged_by) }
+
+  const page = await notionPost<NotionPage>(
+    '/pages',
+    { parent: { database_id: visitsDbId }, properties },
+    env.NOTION_TOKEN,
+  )
+  return { notion_page_id: page.id }
+}
+
+export async function queryVisitsForPlace(
+  placeNotionPageId: string,
+  env: Env,
+): Promise<VisitSummaryData> {
+  const { visits: visitsDbId } = await discoverDbIds(env)
+  const allResults: NotionPage[] = []
+  let cursor: string | undefined
+
+  do {
+    const body: Record<string, unknown> = {
+      filter: { property: 'Place', relation: { contains: placeNotionPageId } },
+      sorts: [{ property: 'Visited On', direction: 'descending' }],
+      page_size: 100,
+    }
+    if (cursor) body['start_cursor'] = cursor
+    const res = await notionPost<NotionQueryResponse>(
+      `/databases/${visitsDbId}/query`,
+      body,
+      env.NOTION_TOKEN,
+    )
+    allResults.push(...res.results)
+    cursor = res.has_more && res.next_cursor ? res.next_cursor : undefined
+  } while (cursor)
+
+  if (allResults.length === 0) return { last_visited: null, visit_count: 0, avg_rating: null }
+
+  const lastProp = allResults[0].properties['Visited On'] as unknown as { date?: { start: string } | null } | undefined
+  const last_visited = lastProp?.date?.start ?? null
+
+  const ratings = allResults
+    .map(p => p.properties['Rating']?.number ?? null)
+    .filter((r): r is number => r != null)
+  const avg_rating = ratings.length > 0
+    ? Math.round((ratings.reduce((a, b) => a + b, 0) / ratings.length) * 10) / 10
+    : null
+
+  return { last_visited, visit_count: allResults.length, avg_rating }
+}
+
+export async function patchVisitRating(
+  visitNotionPageId: string,
+  rating: number,
+  env: Env,
+): Promise<void> {
+  await notionPatch<NotionPage>(
+    `/pages/${visitNotionPageId}`,
+    { properties: { 'Rating': { number: rating } } },
+    env.NOTION_TOKEN,
+  )
+}
+
+export async function patchPlaceSummary(
+  placeNotionPageId: string,
+  summary: VisitSummaryData,
+  env: Env,
+): Promise<void> {
+  const properties: Record<string, unknown> = {
+    'Visit Count': { number: summary.visit_count },
+  }
+  if (summary.last_visited != null) {
+    properties['Last Visited'] = { date: { start: summary.last_visited } }
+  }
+  if (summary.avg_rating != null) {
+    properties['Avg Rating'] = { number: summary.avg_rating }
+  }
+  await notionPatch<NotionPage>(
+    `/pages/${placeNotionPageId}`,
+    { properties },
+    env.NOTION_TOKEN,
+  )
+}
+
+export async function getPlaceByNotionPageId(notionPageId: string, env: Env): Promise<Place | null> {
+  try {
+    const page = await notionGet<NotionPage>(`/pages/${notionPageId}`, env.NOTION_TOKEN)
+    return notionPageToPlace(page)
+  } catch {
+    return null
+  }
+}
+
+export async function patchPageProperties(
+  notionPageId: string,
+  properties: Record<string, unknown>,
+  env: Env,
+): Promise<void> {
+  await notionPatch<NotionPage>(`/pages/${notionPageId}`, { properties }, env.NOTION_TOKEN)
+}
+
+export async function archivePlace(notionPageId: string, env: Env): Promise<void> {
+  const res = await fetch(`${NOTION_API}/pages/${notionPageId}`, {
+    method: 'PATCH',
+    headers: headers(env.NOTION_TOKEN),
+    body: JSON.stringify({ archived: true }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Notion ${res.status} PATCH /pages/${notionPageId}: ${text}`)
+  }
+}
+
+export async function findPlaceByInternalId(internalId: string, env: Env): Promise<Place | null> {
+  const res = await notionPost<NotionQueryResponse>(
+    `/databases/${env.NOTION_DB_ID}/query`,
+    {
+      filter: { property: N.internal_id, rich_text: { equals: internalId } },
+      page_size: 1,
+    },
+    env.NOTION_TOKEN,
+  )
+  if (res.results.length === 0) return null
+  return notionPageToPlace(res.results[0])
 }

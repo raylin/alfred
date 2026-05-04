@@ -3,7 +3,7 @@
 **Project:** alfred
 **Phase:** 1.5 — Quality & Trust(完善景點到好用)
 **Builds on:** `docs/alfred-phase-0-1-spec.md` (v1.1)
-**Last updated:** 2026-05-04, version 1.0
+**Last updated:** 2026-05-04, version 1.1
 
 ---
 
@@ -158,6 +158,8 @@ Phase 0+1 把景點 bot 做到「能用」。Phase 1.5 把它做到「好用」,
 |---|---|---|---|
 | `user:{line_user_id}:home` | `{ lat, lng, address, configured_at }` | none(persist) | Home cache,避免每次打 Notion;Settings DB 是 source of truth |
 | `user:{line_user_id}:current_origin` | `{ lat, lng, set_at }` | 2 小時 | 臨時 override |
+| `user:{line_user_id}:home_update_pending` | `"1"` | 5 分鐘 | /setup 觸發後的 flag;下一次 location message 消費此 flag 並覆蓋 home（ADR-021） |
+| `system:db_ids` | `{ places, visits, settings }` | 24 小時 | DB discovery 快取（ADR-019） |
 | `event:{ulid}` | structured event JSON | 7 天 | Observability ring buffer |
 | `events:recent` | array of last 100 ULIDs | none | Index for PM review fetch |
 
@@ -191,7 +193,7 @@ export interface Migration {
 
 ### 3.3 Runner 行為
 
-1. 確保 Notion 有「Alfred — 設定」 page 底下有 `Migrations` DB,沒有就建
+1. 確保 Migrations DB 存在 `NOTION_PARENT_PAGE_ID` 底下（與 Place DB 同層），沒有就建（ADR-018；不另開「Alfred — 設定」page）
 2. 從 `Migrations` DB 讀取已套用的 migration ID 集合
 3. 從 `scripts/migrations/` 讀取所有 migrations(filename 排序)
 4. 找出尚未套用的 → 一支支跑
@@ -264,7 +266,7 @@ type PlacesIntent =
 
 `src/capabilities/places/handler.ts` 接到 text 訊息(URL/Image bypass router 仍直接 add)→ 先過 places-intent-classifier → 對應 flow-* 模組。
 
-舊的 keyword-based `isSearchQuery` 撤掉(以 LLM 取代)。
+舊的 keyword-based `isSearchQuery` 與 `QUESTION_WORDS` 完整移除（不保留 fallback；ADR-024）。
 
 ### 4.3 Conversational Edit Intent Parsing
 
@@ -280,6 +282,11 @@ type EditOp =
 ```
 
 LLM(Sonnet)解析 → 回 JSON → bot 套用到 Notion。
+
+實作細節(ADR-027, ADR-028):
+- `applyEdits` 將所有合法 ops 合併為一次 `PATCH /pages/{id}` 呼叫（一次 rate-limit exposure）。
+- 改名指令(`Name` property)在 `applyEdits` 層軟性拒絕：移入 failed list,`error: 'rename_not_supported'`；`flow-edit` 回覆「想改名的話，請刪除這筆重新加入。」
+- Disambiguation postback 用 `notion_page_id`（不是 `internal_id`），以節省 Notion filter 查詢（ADR-026）。
 
 ### 4.4 Visit Recording
 
@@ -304,7 +311,7 @@ Story H 流程:
 - 每次計算:driving + transit 兩種 mode
 - Field mask 嚴格控制(只取 `duration` 跟 `distanceMeters`)
 - 失敗 / 海外 / 無路線 → 回 null
-- KV cache: `route:{origin_hash}:{dest_place_id}` TTL 24h
+- KV cache: `route:{originLat4dp},{originLng4dp}:{destLat4dp},{destLng4dp}` TTL 24h（lat/lng 截 4 位小數約 11m 精度；ADR-022。不用 google_place_id 是因為部分 flow 無 Place ID）
 
 `lib/distance-format.ts`:
 - minutes < 60 → "22 分"
@@ -317,7 +324,7 @@ Story H 流程:
 🚗 22 分    🚇 35 分
 ```
 
-排序:精確度先 > 距離次(tie-breaker)。Batch 計算 top 5 distances 一次 Routes API call。
+排序:精確度先 > 距離次(tie-breaker)。Tie-break 以 driving duration 為主（transit 為備選,兩者皆無則排末；ADR-023）。Batch 計算 top 5 distances 一次 Routes API call。
 
 ### 4.6 Observability
 
@@ -325,26 +332,41 @@ Story H 流程:
 
 ```typescript
 export async function logEvent(env: Env, event: {
-  type: string;          // "places.search", "places.add", "places.edit", ...
-  user_id: string;
-  intent?: string;
-  confidence?: number;
-  filters?: object;
-  result_count?: number;
+  type: string;               // 見下方類型清單
+  user_id?: string | undefined;  // optional：group chat 無 userId
+  intent?: string | undefined;
+  confidence?: number | undefined;
+  filters?: object | undefined;
+  result_count?: number | undefined;
   duration_ms: number;
   outcome: 'success' | 'error' | 'unknown';
-  error?: string;
-  meta?: object;
+  error?: string | undefined;
+  meta?: object | undefined;
 }): Promise<void>
 ```
 
-- 寫 KV `event:{ulid}` (TTL 7 天)
-- prepend 到 `events:recent` ring buffer(最後 100 筆)
+Event type 清單（ADR-033, ADR-034）:
+- `places.add.url` — URL / Google Maps URL 新增（Maps URL 加 `meta.flow:'maps'`）
+- `places.add.text` — 文字名稱新增
+- `places.add.image` — 圖片新增
+- `places.add.instagram` — IG URL 新增
+- `places.search` — 搜尋
+- `places.edit` — 編輯
+- `places.delete` — 刪除
+- `places.visit.log` — 造訪記錄
+- `places.dedup_hit` — 重複偵測命中
+- `places.intent_classify` — 意圖分類（非 unknown）
+- `places.intent_unknown` — 意圖無法辨識（ADR-033）
 
-新指令 `/review`(PM userId 硬式授權):
+- 寫 KV `event:{ulid}` (TTL 7 天)；ULID 以 Web Crypto + Crockford base32 生成
+- prepend 到 `events:recent` ring buffer（最後 100 筆）
+- 失敗 non-fatal（整個 logEvent body 在 try/catch 內；ADR-035）
+
+新指令 `/review`（userId 須等於 `PM_LINE_USER_ID` env var；其他 user 回「這指令僅限管理員。」）:
 - 撈 `events:recent` 最近 100 筆
-- 整理成 markdown summary
-- push 訊息回給 PM
+- parallel fetch 各 event
+- 整理成 markdown summary（類型分佈、結果%、avg/p95 耗時、最近錯誤、未知意圖 sample）
+- 超 4500 字元截斷
 
 ---
 
@@ -363,14 +385,16 @@ Bot 收到任何 LINE event 時:
 
 LINE 收到 LocationMessage:
 1. 抽取 lat / lng / address
-2. upsert Settings DB
-3. 寫 KV cache
-4. 回確認訊息(判斷是 home 設定 or current_origin override)
+2. 判斷規則（ADR-020, ADR-021）：
+   - (a) `home_update_pending` flag 存在 → 清 flag，覆蓋 home（upsert Settings DB + KV）
+   - (b) 無 home → 第一次設定 home（upsert Settings DB + KV）
+   - (c) home 已存在且無 flag → 設為 `current_origin` 2h override（僅 KV）
+3. 回確認訊息說明生效的是 home 或臨時位置
 
 ### 5.3 Slash Commands
 
-- `/setup` — 顯示當前 home,提示重設
-- `/home` — 清除 `current_origin`(回到家裡位置)
+- `/setup` — 顯示當前 home；若 home 已設定，寫 `home_update_pending` flag（TTL 5 分鐘），提示重設（ADR-021）
+- `/home` — 清除 `current_origin`（回到家裡位置）
 - `/here` — 提示分享位置以設定 current_origin
 
 ### 5.4 Origin 解析優先順序
@@ -386,19 +410,20 @@ LINE 收到 LocationMessage:
 
 完工檢查清單:
 
-- [ ] Migration runner:跑完 init,Place DB 多三個 summary fields,Visits DB / Settings DB 都建好
-- [ ] Story H:口語訊息「我們今天去了 X」能成功記 visit 並 update summary
-- [ ] Story I:剛收一張卡片,「改成 X」能成功修改 last_place
-- [ ] Story J:指名「X 改成 Y」disambiguation 流程正常
-- [ ] Story K:「刪掉剛剛 / 重做」清掉 last_place 對應 Notion entry
-- [ ] Story K:「刪掉 X」disambiguation + 確認 postback 流程正常
-- [ ] Story L:搜尋「沒去過的」「最近很愛的」filter 有效
-- [ ] Story M:Flex 卡片(新增 + 搜尋 carousel 都)顯示 distance row
-- [ ] Story N:首次互動引導 home 設定;LocationMessage 正確 upsert;`/setup` `/home` 有效
-- [ ] 海外 / 無大眾運輸 → distance row 隱藏對應線
-- [ ] 排序:相同 ranking 下,distance 短的在前
-- [ ] /review 指令 PM 端可拉 100 筆 event summary
-- [ ] Phase 0+1 所有功能 regression 通過
+- [ ] Migration runner:跑完 init,Place DB 多三個 summary fields,Visits DB / Settings DB 都建好；重跑幂等
+- [ ] Story H:口語訊息「我們今天去了 X」能成功記 visit 並 update Place summary fields
+- [ ] Story H:disambiguate 多筆候選;rating postback（1-5 or 跳過）正常
+- [ ] Story I:剛收卡片（5 分鐘內）發「改成 X」→ Notion 更新,回覆「✓ 已更新」
+- [ ] Story J:指名「X 改成 Y」→ search + disambiguation + 更新
+- [ ] Story K:「刪掉剛剛 / 重做」→ 立即刪除（no confirm,5 分鐘 anchor）
+- [ ] Story K:「刪掉 X」→ 搜尋 + confirm Flex（含造訪次數）→ 確認 → 刪除
+- [ ] Story L:「沒去過的台北景點」→ Visit Count = 0 filter；「上次很愛的」→ loved_recently 兩步查詢
+- [ ] Story M:新增景點 Flex 卡片底部顯示 🚗 / 🚇（無距離資料則不顯示）
+- [ ] Story M:搜尋 carousel 各 bubble 顯示距離；tie-break 以 driving 為主
+- [ ] Story N:首次互動引導 home 設定；LocationMessage 判斷 home vs current_origin 規則正確
+- [ ] Story N:`/setup` flag 機制正常（5 分鐘內再分享位置 → 覆蓋 home）；`/home` 清 current_origin
+- [ ] /review 限 PM_LINE_USER_ID；其他 user 回「這指令僅限管理員。」；summary 含類型分佈 / 結果 % / 耗時
+- [ ] Phase 0+1 所有功能 regression 通過（unit tests 505 passed）
 
 ---
 
@@ -491,7 +516,9 @@ Fee Type, Fee Details, Summary, Source Type, Status
 
 ## 8. Task Breakdown
 
-執行順序:**M0 → M1 → M2 → 18 → 17 → 13 → 14 → 15 → 16 → 20 → 19 → 21**
+執行順序（實際）:**M0 → M1 → M2 → 18 → 17 → 13 → 14 → 15 → 16 → 20 → 19 → 21**
+
+> 原始 spec 順序為 M0→M1→M2→18→17→13→14→15→16→20→19→21,實際執行相同。Task 17（Distance）在 Task 13（Classifier）之前是因為 home-store + routes-api 是 Task 18 的 dependency,Task 13 依賴 handler.ts 整合。
 
 ### Task M0 — Migration Runner Infrastructure
 建 `scripts/migrations/_runner.ts` + `_types.ts`,在 Notion 建 `Migrations` DB,README 補執行說明。
@@ -567,8 +594,9 @@ Claude Code 可自行決定:
 
 已確認(2026-05-04):
 - Google Routes API key:重用 `GOOGLE_PLACES_API_KEY`(同 GCP project,Routes API 已啟用)
-- `/review` 授權 PM LINE userId:`U90ddd03f8005e0b8704745b170390ee4`(硬式 check)
-- 「Alfred — 設定」Notion page:沿用 `NOTION_PARENT_PAGE_ID`(356d06a9b2ec8009838cd212d2f17715),migration runner 在同一個 parent page 底下建 Migrations/Settings/Visits DB
+- `/review` 授權 PM LINE userId:儲存為 `PM_LINE_USER_ID` env var（Cloudflare secret）
+- Notion hub page:沿用 `NOTION_PARENT_PAGE_ID`（356d06a9b2ec8009838cd212d2f17715）;不另開「Alfred — 設定」page;Migrations / Visits / Settings DB 皆建在此 parent 底下（ADR-018）
+- DB ID discovery:不設額外 env var;runtime 透過 parent page scan + KV cache 取得（ADR-019）
 
 ---
 
@@ -582,4 +610,4 @@ Claude Code 可自行決定:
 - Error handling 風格(§6.9)
 - Execution report 格式(§12)
 
-更新後的 spec doc 預期在 Phase 1.5 完工後升 v1.2。
+此 spec doc 於 Phase 1.5 完工後升至 v1.1（見 docs/spec-changelog-1-5.md）。Phase 2 規劃時再開新 spec。

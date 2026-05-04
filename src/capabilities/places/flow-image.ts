@@ -5,7 +5,11 @@ import { buildDraftCard, buildDedupCard } from './flex-message'
 import { writeRawExtraction, writeUserLastPlace } from './kv-store'
 import { checkDuplicate, writeDedupKV } from './duplicate-check'
 import { resolveGooglePlace } from './resolve-google-place'
+import { getEffectiveOrigin } from './home-store'
+import { computeSingleRoute } from '../../integrations/routes-api'
+import type { RouteResult } from '../../integrations/routes-api'
 import { PlacesError } from './errors'
+import { logEvent } from '../../lib/observability'
 import type { Env } from '../../core/env'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -24,8 +28,11 @@ export async function runFlowImage(
   userId?: string,
   chatId?: string,
 ): Promise<void> {
+  const t0 = Date.now()
+  try {
   // 1. Size check (Claude API limit: 5MB per image)
   if (image.sizeBytes > MAX_IMAGE_BYTES) {
+    await logEvent(env, { type: 'places.add.image', user_id: userId, duration_ms: Date.now() - t0, outcome: 'unknown', error: 'image_too_large' })
     await sendReply(
       replyToken,
       [{ type: 'text', text: '圖片太大了，可以截小一點再傳嗎？或直接告訴我地點名稱。' }],
@@ -41,6 +48,7 @@ export async function runFlowImage(
     place = await extractFromImage(image.contentBase64, image.mimeType, env)
   } catch (err) {
     if (err instanceof NoPlaceDetectedError) {
+      await logEvent(env, { type: 'places.add.image', user_id: userId, duration_ms: Date.now() - t0, outcome: 'unknown', error: 'no_place_detected' })
       await sendReply(
         replyToken,
         [{ type: 'text', text: '看起來不是景點相關的圖，可以再試一次，或直接告訴我地點名稱。' }],
@@ -69,6 +77,7 @@ export async function runFlowImage(
   if (place.google_place_id) {
     const dedup = await checkDuplicate(place.google_place_id, env)
     if (dedup.found) {
+      await logEvent(env, { type: 'places.dedup_hit', user_id: userId, duration_ms: Date.now() - t0, outcome: 'success', meta: { flow: 'image' } })
       await sendReply(replyToken, [buildDedupCard(dedup.name)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
       return
     }
@@ -114,7 +123,26 @@ export async function runFlowImage(
     }
   }
 
-  // 7. Send Flex Message reply
+  // 7. Compute distance post-Notion-write (non-blocking — ADR-022)
   const fullPlace = { ...place, notion_url: notionResult.url, notion_page_id: notionResult.notion_page_id }
-  await sendReply(replyToken, [buildDraftCard(fullPlace)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
+  let distance: RouteResult | null = null
+  if (userId) {
+    try {
+      const origin = await getEffectiveOrigin(env, userId)
+      if (origin.source !== null && fullPlace.latitude != null && fullPlace.longitude != null) {
+        distance = await computeSingleRoute({ lat: origin.lat, lng: origin.lng }, { lat: fullPlace.latitude, lng: fullPlace.longitude }, env)
+      }
+    } catch (err) {
+      console.warn('[flow-image] distance computation failed (non-fatal)', err)
+    }
+  }
+
+  // 8. Send Flex Message reply
+  await sendReply(replyToken, [buildDraftCard(fullPlace, undefined, distance)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
+  await logEvent(env, { type: 'places.add.image', user_id: userId, duration_ms: Date.now() - t0, outcome: 'success' })
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message.slice(0, 100) : String(err).slice(0, 100)
+    await logEvent(env, { type: 'places.add.image', user_id: userId, duration_ms: Date.now() - t0, outcome: 'error', error: errorMsg })
+    throw err
+  }
 }

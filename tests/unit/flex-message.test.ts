@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { buildDraftCard } from '../../src/capabilities/places/flex-message'
+import { buildDraftCard, buildSearchCarousel } from '../../src/capabilities/places/flex-message'
 import { SAMPLE_PLACE } from '../fixtures/places'
+import type { RouteResult } from '../../src/integrations/routes-api'
 
 const NOTION_URL = 'https://www.notion.so/test-page-abc'
 
@@ -98,5 +99,77 @@ describe('buildDraftCard', () => {
     const msg = buildDraftCard(PLACE_WITH_NOTION)
     const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
     expect(bodyStr).not.toContain('找到的是')
+  })
+
+  it('includes distance row when driving + transit are present', () => {
+    const distance: RouteResult = {
+      driving: { duration_minutes: 22, distance_meters: 5000 },
+      transit: { duration_minutes: 35, distance_meters: 5800 },
+    }
+    const msg = buildDraftCard(PLACE_WITH_NOTION, undefined, distance)
+    const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
+    expect(bodyStr).toContain('🚗')
+    expect(bodyStr).toContain('22 分')
+    expect(bodyStr).toContain('🚇')
+    expect(bodyStr).toContain('35 分')
+  })
+
+  it('includes distance row with driving only when transit is null', () => {
+    const distance: RouteResult = {
+      driving: { duration_minutes: 15, distance_meters: 3000 },
+      transit: null,
+    }
+    const msg = buildDraftCard(PLACE_WITH_NOTION, undefined, distance)
+    const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
+    expect(bodyStr).toContain('🚗')
+    expect(bodyStr).not.toContain('🚇')
+  })
+
+  it('does not add distance row when both driving and transit are null', () => {
+    const distance: RouteResult = { driving: null, transit: null }
+    const msg = buildDraftCard(PLACE_WITH_NOTION, undefined, distance)
+    const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
+    expect(bodyStr).not.toContain('🚗')
+    expect(bodyStr).not.toContain('🚇')
+  })
+
+  it('does not add distance row when distance is not provided', () => {
+    const msg = buildDraftCard(PLACE_WITH_NOTION)
+    const bodyStr = JSON.stringify((msg.contents as { body: unknown }).body)
+    expect(bodyStr).not.toContain('🚗')
+  })
+})
+
+describe('buildSearchCarousel', () => {
+  const PLACE_WITH_NOTION = {
+    ...SAMPLE_PLACE,
+    notion_url: 'https://www.notion.so/test-page-abc',
+    notion_page_id: 'test-page-abc',
+  }
+
+  it('includes distance row in bubble when distance provided', () => {
+    const distance: RouteResult = {
+      driving: { duration_minutes: 20, distance_meters: 4000 },
+      transit: null,
+    }
+    const msg = buildSearchCarousel([PLACE_WITH_NOTION], [distance])
+    expect(JSON.stringify(msg.contents)).toContain('🚗')
+    expect(JSON.stringify(msg.contents)).toContain('20 分')
+  })
+
+  it('does not add distance row when distances array is not provided', () => {
+    const msg = buildSearchCarousel([PLACE_WITH_NOTION])
+    expect(JSON.stringify(msg.contents)).not.toContain('🚗')
+  })
+
+  it('handles mixed distances (some null)', () => {
+    const places = [PLACE_WITH_NOTION, PLACE_WITH_NOTION]
+    const distances: (RouteResult | null)[] = [
+      { driving: { duration_minutes: 10, distance_meters: 2000 }, transit: null },
+      null,
+    ]
+    const msg = buildSearchCarousel(places, distances)
+    const carouselStr = JSON.stringify(msg.contents)
+    expect(carouselStr).toContain('🚗')
   })
 })

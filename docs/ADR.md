@@ -473,3 +473,378 @@ Implement Option B (`discoverDbIds` in `src/integrations/notion.ts`). The functi
 - DB titles must remain stable (renaming "Visits" would break discovery until KV TTL expires). This is acceptable — titles are internal names, not user-facing.
 - `NOTION_PARENT_PAGE_ID` must now be set as a Cloudflare secret before deploying Phase 1.5 features. Added to `src/core/env.ts`. Action required: `npx wrangler secret put NOTION_PARENT_PAGE_ID`.
 - Future: Task 18+ will wire `discoverDbIds` into the request path when Visits/Settings DBs are first needed.
+
+## ADR-020 — First location message sets home; subsequent ones set current_origin
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 18
+
+### Context
+When a user sends a LINE LocationMessage, `runFlowSetup` must decide what to do with it. The spec leaves open the question of how to distinguish "I'm sharing my home" from "I'm sharing where I am right now." Asking the user to confirm each time ("Is this your home or current location?") adds friction. We need a zero-friction rule.
+
+### Decision
+If the user has no home saved yet, the first location message is treated as home. If home already exists, the location is treated as a 2-hour `current_origin` override. This is implemented in `src/capabilities/places/flow-setup.ts` with a single `getHomeLocation` check — no user prompt required.
+
+### Alternatives considered
+- Always ask: "是家裡位置還是目前位置?" with quick-reply buttons — more explicit but requires a round-trip interaction.
+- Always set home: breaks the use case of sharing a current location while traveling.
+- Always set current_origin: user can never set home via location share (would need another mechanism).
+
+### Consequences
+- Zero UI friction for the common case (first setup → home, subsequent → current position).
+- If a user accidentally shares a wrong location first, they must re-share to overwrite home. This is acceptable: `/setup` shows the current home address so they can detect the mistake.
+- The ambiguity is resolved by the ordering heuristic rather than user intent; flagged to PM Claude for review.
+
+## ADR-021 — Flag-based home update: /setup sets pending flag, next location consumes it
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 18 amendment
+
+### Context
+`runFlowSetup` (ADR-020) could not distinguish "user wants to update home" from "user is sharing current position" when home already exists. `/setup` was read-only for users with home already set, leaving no self-service update path.
+
+### Decision
+`/setup` with an existing home writes a `user:{id}:home_update_pending` KV flag with a 5-minute TTL, and replies with an update prompt. `runFlowSetup` calls `consumeHomeUpdatePending` first: if the flag exists it is deleted atomically (read-then-delete; deletion failure is non-fatal — TTL expires it) and the location is treated as a home update. If no flag, the existing ADR-020 logic applies: no home → first-time setup; home exists → current_origin 2h.
+
+### Alternatives considered
+- Quick-reply buttons in the location message asking intent: requires extra round-trip and user decision at location-share time.
+- Dedicated `/update-home` command: redundant with `/setup`; `/setup` already implies configuration intent.
+- Persistent `home_update_requested` without TTL: risks stale state if user doesn't follow through.
+
+### Consequences
+- `/setup` is now the single entry point for both first-time setup and home updates — no new commands needed.
+- 5-minute window is forgiving for typical flows (open LINE → tap + → share location) while preventing accidental home overwrites from later location shares.
+- `consumeHomeUpdatePending` read-then-delete is not atomic in KV, but double-consumption is safe: both calls would `setHomeLocation` to the same or a near-simultaneous location. Acceptable at family scale.
+
+## ADR-022 — Distance computed after Notion write; cache key uses lat/lng hash for both origin and dest
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 17
+
+### Context
+Two sub-decisions are grouped here because they share the same rationale (non-blocking, pragmatic design).
+
+**Sub-A: Distance after Notion write.** Distance computation (Routes API call) must happen somewhere in the add-flow pipeline. Placing it before Notion write would mean a Routes API failure could block the core flow (saving the place). Placing it after Notion write decouples the two operations: the place is always saved, and distance is best-effort enhancement.
+
+**Sub-B: Cache key uses lat/lng hash, not google_place_id.** The spec suggested `route:{origin_hash}:{dest_place_id}`, but not all flow paths have a `google_place_id` at display time (flow-a from URL, flow-d from IG, flow-image may have no Place ID). Using lat/lng hash (`lat.toFixed(4),lng.toFixed(4)`) for both origin and destination provides universal coverage with ~11m precision — sufficient for family-scale route queries.
+
+### Decision
+**Sub-A:** Distance computation is placed immediately after all KV writes but before the final `sendReply`. It is wrapped in `try/catch`; failure logs a warning and the card is sent without a distance row.
+
+**Sub-B:** Cache key format is `route:{lat4dp,lng4dp}:{lat4dp,lng4dp}`. TTL is 86400s (24h). Null results (`{ driving: null, transit: null }`) are cached so repeated requests for routes in no-coverage areas don't re-hit the API.
+
+### Alternatives considered
+- Distance before Notion write: tight coupling; API failure breaks the core flow.
+- `google_place_id` as dest key: narrower coverage; doesn't work for places without Place ID.
+- No caching: repeated searches for nearby places would hammer Routes API.
+
+### Consequences
+- Places without lat/lng (rare — only if both Google resolution and extraction failed) silently skip distance.
+- Routes API failures produce a log warning; the card renders without a distance row. Notion write is always unaffected.
+- `GOOGLE_PLACES_API_KEY` restriction on GCP must include Routes API (confirmed before Task 17 started).
+
+## ADR-023 — Driving duration as primary distance tie-break in search results
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 17
+
+### Context
+When multiple search results have equal keyword relevance scores, a secondary sort criterion is needed. Two transit modes are available: driving and public transit. The question is which to use as the primary tie-break (with the other as fallback, and "no data" last).
+
+### Decision
+Use driving duration as the primary tie-break. Transit duration is the secondary fallback. Places where neither is available rank last. Implementation in `flow-e-search.ts` via `drivingMinutes()` helper (returns `Infinity` when both modes null).
+
+### Alternatives considered
+- Transit as primary: more eco-friendly signal, but Taiwan families overwhelmingly drive to family destinations; transit coverage in suburban/mountain areas is sparse.
+- Distance in meters instead of duration: duration is more user-relevant (travel time matters more than raw distance in Taiwan's urban/suburban mix).
+- Equal-weight composite: more complex, harder to explain to PM; not specified.
+
+### Consequences
+- Results slightly favor car-accessible destinations in tie situations. Accepted: this matches the target family persona (owns a car or rents for outings).
+- Transit users get accurate transit times displayed on the card even though driving wins ties.
+- If PM review indicates transit should be primary, changing `drivingMinutes()` → `transitMinutes()` is a one-liner.
+
+## ADR-024 — Replace keyword-based isSearchQuery with LLM within-places intent classifier
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 13
+
+### Context
+Phase 0+1 used `isSearchQuery()` (keyword matching on QUESTION_WORDS + punctuation) to split text input into "search" vs "add new place". Phase 1.5 adds edit, delete, visit, and setup intents, which keyword matching cannot reliably distinguish from each other or from add/search. A second LLM call (same Haiku model as the outer intent router) was added to classify within-places intent.
+
+### Decision
+`classifyPlacesIntent(message, context, env)` uses Claude Haiku to return `{ intent, confidence, reasoning }` from a fixed enum. `isSearchQuery` and `QUESTION_WORDS` are removed from `input-detect.ts` (Option A: clean removal). Handler reads `user:{id}:last_place` KV — if the card was sent within 5 minutes, the LLM receives context that biases toward edit/delete. `confidence < 0.6` forces `unknown` regardless of returned intent. parse failure / API error → `unknown` (safe default).
+
+### Alternatives considered
+- Expand `isSearchQuery` keyword list: brittle; cannot express edit/delete/visit without overlapping add/search.
+- Rule-based decision tree: requires maintaining a complex branching set of Chinese patterns; fragile for novel phrasing.
+- Keep keyword fallback alongside LLM: two conflicting signals; increases code complexity for marginal reliability gain.
+
+### Consequences
+- One additional Haiku call per text message in the places flow (~5-10ms, $0.001/1000 calls at current pricing). Acceptable for family-scale usage.
+- edit/delete/visit intents are stubs at Task 13 (show "功能即將推出" messages). Tasks 14-16 will replace the stubs.
+- If Haiku is unavailable, the safe default (`unknown`) triggers the generic "I don't understand" handler — no silent misbehavior.
+
+## ADR-025 — Store pending visit parse context in KV during disambiguation
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 14
+
+### Context
+When `runFlowVisit` resolves a place_query to multiple candidates, it sends a disambiguation Flex card. The user taps a button (postback `visit:select:{page_id}`), at which point the handler needs to know the original visited_on, rating_signal, and notes from the parsed message. There is no mechanism to carry the parsed VisitParseResult through a postback.
+
+### Decision
+Before sending the disambiguation card, write `PendingVisitData { visited_on, rating_signal, notes }` to `user:{id}:pending_visit` KV with TTL 10 min. `runFlowVisitSelect` reads and deletes this key before recording the visit. If the key is missing (expired or no userId), defaults are used: today's date, null rating, null notes.
+
+### Alternatives considered
+- Encode parse result in postback data: postback data is limited to 300 bytes; structured JSON would be fragile and size-constrained.
+- Re-parse the original message on postback: the original message text is not available in the postback event.
+- Accept data loss (use defaults on disambiguation): simpler, but loses user-supplied date/notes which could be valuable.
+
+### Consequences
+- One additional KV write per disambiguation event (rare path).
+- 10-minute TTL matches the pending_rating window; expired pending_visit defaults gracefully.
+
+## ADR-027 — Single PATCH call for all valid edit ops in applyEdits
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 15
+
+### Context
+`applyEdits` must translate a list of `EditOp` values into Notion property updates. The naive approach is one PATCH per op; the alternative is building all ops into one payload and sending a single PATCH.
+
+### Decision
+Build all valid ops into one `Record<string, unknown>` payload and issue a single `PATCH /pages/{id}` call. If the PATCH fails, all ops move to `failed`. This is consistent with Notion's API design (properties is a map, not a list of commands).
+
+### Alternatives considered
+- One PATCH per op: more fine-grained failure isolation, but multiplies API calls and adds latency for multi-op edits.
+- Transaction model: not available in Notion's API.
+
+### Consequences
+- Partial success at the network level is not possible: either all reach Notion or none do.
+- Partial success at the validation level still happens (buildEntry can reject individual ops before the PATCH).
+- Simpler code; single rate-limit exposure per user edit.
+
+---
+
+## ADR-028 — Rename detected by LLM, soft-rejected via ApplyResult
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 15
+
+### Context
+Task 15 spec (open question 1) asks whether rename should be a hard error at the parser or a soft suggestion. The LLM can detect rename intent ("改名叫X") and return `{ property: 'Name', value: 'X' }`. The question is where to reject it.
+
+### Decision
+Let `parseEditIntent` return the Name op if detected (for visibility). `applyEdits` immediately puts any Name op into `failed` with `error: 'rename_not_supported'` before any Notion call. `flow-edit` inspects `result.failed` for this error and replies "想改名的話，請刪除這筆重新加入。" — a helpful redirect rather than a silent failure.
+
+### Alternatives considered
+- Hard reject at parser (return [] for rename): parser never surfaced rename intent, so callers couldn't give a helpful message.
+- Hard reject at applyEdits with a thrown error: would not allow mixed scenarios (rename + other edits).
+- Allow rename: not supported because Notion title changes are complex and the spec explicitly says "reject".
+
+### Consequences
+- Users who attempt rename get a clear, actionable message.
+- Mixed edits (rename + valid op) succeed partially; the rename note is appended to the success reply.
+- Name op flows through the system but never reaches Notion.
+
+---
+
+## ADR-026 — Use notion_page_id (not internal_id) in visit:select postback
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 14
+
+### Context
+The Task 14 spec says `postback: visit:select:{internal_id}`. Resolving an internal_id (Alfred's UUID) to a Notion page requires a `rich_text: { equals: internalId }` filter query. Using `notion_page_id` directly allows a single `GET /pages/{id}` call instead.
+
+### Decision
+`buildDisambiguateCard` encodes `visit:select:{p.notion_page_id}` in button postback data. `runFlowVisitSelect` calls `getPlaceByNotionPageId` (GET /pages/{id}) which is simpler and faster than a filter query.
+
+### Alternatives considered
+- Follow spec (use internal_id): requires `findPlaceByInternalId` — an extra Notion filter query on postback.
+- Store the full place list in KV: high payload, complexity not warranted.
+
+### Consequences
+- Slight deviation from spec naming (internal_id vs notion_page_id). Both are UUIDs; behavior is identical from the user's perspective.
+- notion_page_id is always present on Place objects returned by searchPlaces, so no additional lookup is needed at disambiguation time.
+
+---
+
+## ADR-029 — No confirmation for last_place anchor delete; confirmation required for named delete
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 16
+
+### Context
+Deleting a place is destructive. The spec calls for a confirmation policy decision: should the "last_place" path (user says "重做" or "刪掉剛剛那筆") require a confirmation step, or should it delete immediately?
+
+### Decision
+Two confirmation tiers:
+1. **last_place path** (5-minute anchor): no confirmation — delete immediately and reply "✓ 已刪除 X". The user just added the place and wants to undo it; the intent is unambiguous and a confirmation popup is friction.
+2. **Named path** ("刪掉大湖公園") and **post-disambiguation**: always show a confirmation card with the place name, visit count, and "確認刪除"/"取消" buttons. The user may be referencing accumulated data; showing visit count makes the stakes clear.
+
+### Alternatives considered
+- Confirm both paths: safer but frustrating for the "重做" flow.
+- No confirmation for either: simpler, but risks silent deletion of cherished records.
+- Require `/confirm` text reply: doesn't work well on mobile without buttons.
+
+### Consequences
+- "重做" feels instant and natural.
+- Named delete surface visit count ("⚠️ 會一併失去 X 筆造訪記錄") so user can see what they're losing.
+- The two-tier policy requires checking whether we came via anchor or named path.
+
+---
+
+## ADR-030 — Archive (not hard-delete) places; three KV cleanup steps; visits preserved
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 16
+
+### Context
+Notion's API supports setting `archived: true` on a page (PATCH /pages/{id}). This is a soft-delete: the page disappears from queries but is recoverable from Notion UI for 30 days. The question is what to do with related state (dedup KV, last_place KV, Visits).
+
+### Decision
+1. **Archive, not hard delete**: `archivePlace` sends `PATCH /pages/{id}` with `{ archived: true }`. Archived pages are invisible to `searchPlaces` (Notion filter excludes archived by default).
+2. **Dedup KV cleanup**: delete `dedup:{google_place_id}` immediately after archiving. Without this, the next add of the same location would hit the dedup check and show a false positive.
+3. **last_place KV cleanup**: if `user:{userId}:last_place` points to the deleted place (same `internal_id`), delete it. Prevents a subsequent "重做" from trying to delete something already gone.
+4. **Visits not deleted**: visit records remain in the Visits DB. The relation still points to the archived Place page, but `searchPlaces` won't surface it. This preserves history for potential future features (annual recap, stats).
+
+### Alternatives considered
+- Hard delete via Notion API: not supported (no DELETE /pages endpoint).
+- Delete visits too: simpler DB state, but permanently loses visit history.
+- No KV cleanup: dedup false positives on re-add; last_place pointing at dead page would error on next use.
+
+### Consequences
+- Place data is recoverable in Notion for 30 days.
+- Next "add same place" works correctly (dedup KV cleared).
+- "重做" won't try to re-delete an already-archived place.
+- Visit history is preserved for potential future analytics.
+
+---
+
+## ADR-031 — No pending_delete KV; page_id in postback is sufficient
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 16
+
+### Context
+Edit and visit flows store disambiguation context in KV (`pending_edit`, `pending_visit`) because the postback only carries a page_id — the flow needs to recover the parsed message/visit data. Delete confirmation is different: the postback carries `delete:confirm:{page_id}` which is self-contained; no additional state is needed to execute the delete.
+
+### Decision
+Do not use a `pending_delete` KV. The confirmation card encodes `delete:confirm:{notionPageId}` and `delete:cancel:{notionPageId}` in postback data. `runFlowDeleteConfirm` looks up the place by page_id and executes the archive. `runFlowDeleteCancel` ignores the page_id and replies "好，沒刪。" No TTL-based expiry needed.
+
+### Alternatives considered
+- pending_delete KV with TTL: would let us expire old confirmation cards. But LINE does not invalidate old postback buttons; a user can tap a 30-min-old card and the page_id still works. Since archiving an already-archived page is idempotent, expiry adds complexity without meaningful protection.
+- Store full place data in KV: heavier payload, not needed since getPlaceByNotionPageId is fast.
+
+### Consequences
+- Simpler implementation.
+- If a user taps a stale confirmation card after the place was already deleted, `getPlaceByNotionPageId` returns null → friendly "找不到" reply. No incorrect behavior.
+
+---
+
+## ADR-032 — loved_recently implemented as two-phase query: Visits DB → Place IDs → in-memory filter
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 20
+
+### Context
+The `loved_recently` visit_state filter ("最近很愛的") requires finding places where a visit with Rating=5 occurred in the last 30 days. The Places DB stores summary fields (`Avg Rating`, `Last Visited`) computed by `recomputePlaceSummary`, but does not store the combination of "recent + 5-star". Notion's Places query API cannot express this condition from Place-side data alone.
+
+### Decision
+Two-phase approach (Option A from spec):
+1. Query the Visits DB with `Rating = 5 AND Visited On >= 30 days ago` (page_size 50). Extract the Place page IDs from the `Place` relation property.
+2. If no IDs → return []. Otherwise, query the Places DB normally (with any other filters like region/indoor_outdoor) using a larger page_size (max(limit*4, 20)) to compensate for in-memory filtering.
+3. Filter results in-memory to only pages whose `notion_page_id` is in the loved set. Slice to `limit`.
+
+### Alternatives considered
+- Option B: degrade loved_recently to highly_rated in search-parser. Simpler but loses the "recency" dimension.
+- Notion formula/rollup: would require DB schema changes outside our control.
+- Store "recent loves" as a KV cache: adds write complexity, TTL management.
+
+### Consequences
+- `loved_recently` costs two Notion API calls instead of one.
+- `discoverDbIds` is called (KV-cached 24h) to get the Visits DB ID.
+- In-memory filter means the Places query over-fetches; with small datasets this is fine.
+- All other visit_state values (never_visited, visited_recently, visited_long_ago, highly_rated) remain single-query via `buildNotionFilter`.
+
+---
+
+## ADR-033 — Split intent_classify vs intent_unknown as separate event types
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 19
+
+### Context
+The spec lists both `places.intent_classify` and `places.intent_unknown` as event type names for the observability system. The intent classifier returns one of 7 intents (add/search/edit/delete/visit/setup/unknown); "unknown" occurs when the LLM returns unknown or confidence < 0.6.
+
+### Decision
+Fire a single logEvent per classification call. If the final intent is 'unknown', use type `places.intent_unknown`; otherwise use `places.intent_classify`. Both carry intent, confidence, duration_ms, and a 50-char message_preview in meta.
+
+### Alternatives considered
+- Always use `places.intent_classify` with intent field differentiating. Simpler but makes the /review type-count table less immediately readable for operators (have to know to look at the intent field breakdown).
+- Two separate events: one always for classify, one additional for unknown. Double-fires on unknown, wastes ring buffer slots.
+
+### Consequences
+- /review type-count immediately shows how often intent is unrecognized without drilling into event data.
+- The 100-slot ring buffer only stores one event per classification call.
+
+---
+
+## ADR-034 — Use places.add.url event type for Google Maps URL flow (flow-c)
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 19
+
+### Context
+The spec lists event types: places.add.url, places.add.text, places.add.image, places.add.instagram. Flow C (Google Maps URL) is triggered by `inputType === 'google-maps-url'` and is a distinct flow from flow A (general URL). The spec does not explicitly name a `places.add.maps` type.
+
+### Decision
+Use `places.add.url` for flow C with `meta: { flow: 'maps' }` to distinguish it from flow A in detailed event queries while keeping the type-count dashboard simple. The meta field allows drilling down without polluting the type namespace with a type not in the spec.
+
+### Alternatives considered
+- places.add.maps: cleaner separation in type counts but not in spec; PM would need to know both types exist.
+- Add to spec via handoff amendment: too much overhead for a minor naming choice.
+
+### Consequences
+- /review type-count shows places.add.url covering both URL and Google Maps flows. Detail is available in meta.flow.
+
+---
+
+## ADR-035 — Outer try/catch wrapper for add flow instrumentation
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 19
+
+### Context
+The five add flows (A/B/C/D/image) throw PlacesError at multiple points. To log error outcomes with per-flow duration, we need a single catch site that covers all throw points and re-throws for the caller (handler.ts) to surface the user-facing message.
+
+### Decision
+Wrap each add flow's entire body in a try/catch block. Log success before the final sendReply, log error outcome in the catch block (with sanitized error message), then re-throw. Dedup hits (early return) are logged separately as `places.dedup_hit` before the sendReply.
+
+### Alternatives considered
+- Log at each individual throw site: requires changes at N throw points; easy to miss new ones.
+- Log in handler.ts catch: handler doesn't know which flow type or flow-specific duration.
+- Log-then-return pattern (no re-throw): breaks the existing PlacesError propagation that handler.ts relies on for user-facing messages.
+
+### Consequences
+- One catch block per add flow.
+- Error messages logged are PlacesError.message (Chinese UX strings) — no user input, safe to store.
+- The pattern is consistent across all add flows.

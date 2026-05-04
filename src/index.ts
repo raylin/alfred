@@ -8,6 +8,7 @@ import {
   getChatId,
   isTextMessage,
   isImageMessage,
+  isLocationMessage,
   fetchMessageContent,
   startLoadingIndicator,
   sendReply,
@@ -15,9 +16,14 @@ import {
   WELCOME_MESSAGE,
 } from './integrations/line'
 import { handleSlashCommand } from './core/slash-commands'
+import { getHomeLocation, hasBeenPromptedRecently, markHomeprompted } from './capabilities/places/home-store'
+import { runFlowSetup } from './capabilities/places/flow-setup'
 import { routeIntent } from './core/intent-router'
 import { handleUnknown } from './core/unknown-handler'
 import { placesHandler, placesImageHandler } from './capabilities/places/handler'
+import { runFlowVisitSelect } from './capabilities/places/flow-visit'
+import { runFlowEditSelect } from './capabilities/places/flow-edit'
+import { runFlowDeleteSelect, runFlowDeleteConfirm, runFlowDeleteCancel } from './capabilities/places/flow-delete'
 import { capabilities } from './capabilities/_registry'
 import { isHttpUrl } from './lib/url-utils'
 
@@ -46,12 +52,65 @@ async function handleEvents(body: LineWebhookBody, env: Env): Promise<void> {
           await sendPush(chatId, [{ type: 'text', text: '好，你可以到 Notion 手動更新，或等阿福之後支援自動更新。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
         } else if (data === 'dedup:skip') {
           await sendPush(chatId, [{ type: 'text', text: '好，跳過，不重複存。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
+        } else if (data.startsWith('visit:select:')) {
+          const notionPageId = data.slice('visit:select:'.length)
+          const userId = event.source.type === 'user' ? event.source.userId : undefined
+          await runFlowVisitSelect(notionPageId, event.replyToken, env, userId, chatId)
+        } else if (data.startsWith('edit:select:')) {
+          const notionPageId = data.slice('edit:select:'.length)
+          const userId = event.source.type === 'user' ? event.source.userId : undefined
+          await runFlowEditSelect(notionPageId, event.replyToken, env, userId, chatId)
+        } else if (data.startsWith('delete:select:')) {
+          const notionPageId = data.slice('delete:select:'.length)
+          const userId = event.source.type === 'user' ? event.source.userId : undefined
+          await runFlowDeleteSelect(notionPageId, event.replyToken, env, userId, chatId)
+        } else if (data.startsWith('delete:confirm:')) {
+          const notionPageId = data.slice('delete:confirm:'.length)
+          const userId = event.source.type === 'user' ? event.source.userId : undefined
+          await runFlowDeleteConfirm(notionPageId, event.replyToken, env, userId, chatId)
+        } else if (data.startsWith('delete:cancel:')) {
+          const notionPageId = data.slice('delete:cancel:'.length)
+          const userId = event.source.type === 'user' ? event.source.userId : undefined
+          await runFlowDeleteCancel(notionPageId, event.replyToken, env, userId, chatId)
         }
         continue
       }
 
       if (event.type === 'message') {
         const message = event.message
+
+        // First-time home setup prompt: check before processing any message (spec §5.1)
+        const userId = event.source.type === 'user' ? event.source.userId : undefined
+        if (userId) {
+          try {
+            const [alreadyPrompted, homeSet] = await Promise.all([
+              hasBeenPromptedRecently(env, userId),
+              getHomeLocation(env, userId),
+            ])
+            if (!alreadyPrompted && !homeSet) {
+              await sendPush(userId, [{
+                type: 'text',
+                text: '我還不知道你住哪 😊 要算距離得知道你家位置。\n可以分享一下嗎?(LINE 點 + → 位置)',
+              }], env.LINE_CHANNEL_ACCESS_TOKEN)
+              await markHomeprompted(env, userId)
+            }
+          } catch (err) {
+            console.error('[webhook] home prompt check failed', err)
+          }
+        }
+
+        // Location messages → home / current_origin setup (spec §5.2)
+        if (isLocationMessage(message)) {
+          if (userId) {
+            await runFlowSetup(
+              { lat: message.latitude, lng: message.longitude, address: message.address },
+              event.replyToken,
+              env,
+              userId,
+            )
+          }
+          continue
+        }
 
         // Image messages bypass LLM intent router — route directly to places (ADR-012)
         if (isImageMessage(message)) {
@@ -78,7 +137,7 @@ async function handleEvents(body: LineWebhookBody, env: Env): Promise<void> {
         await startLoadingIndicator(chatId, env.LINE_CHANNEL_ACCESS_TOKEN)
 
         // Priority 1: slash commands (deterministic, no LLM needed)
-        const slashOutcome = await handleSlashCommand(message.text, event.replyToken, env)
+        const slashOutcome = await handleSlashCommand(message.text, event.replyToken, env, userId)
         if (slashOutcome !== null) {
           if (slashOutcome.type === 'route') {
             await dispatchCapability(slashOutcome.capability, slashOutcome.input, event.replyToken, env, event.source)

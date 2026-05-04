@@ -10,17 +10,27 @@ vi.mock('../../src/integrations/notion', () => ({
 vi.mock('../../src/integrations/line', () => ({
   sendReply: vi.fn().mockResolvedValue(undefined),
 }))
+vi.mock('../../src/capabilities/places/home-store', () => ({
+  getEffectiveOrigin: vi.fn(),
+}))
+vi.mock('../../src/integrations/routes-api', () => ({
+  computeRouteMatrix: vi.fn(),
+}))
 
 import { runFlowE } from '../../src/capabilities/places/flow-e-search'
 import { PlacesError } from '../../src/capabilities/places/errors'
 import { parseSearchIntent } from '../../src/capabilities/places/search-parser'
 import { searchPlaces } from '../../src/integrations/notion'
 import { sendReply } from '../../src/integrations/line'
+import { getEffectiveOrigin } from '../../src/capabilities/places/home-store'
+import { computeRouteMatrix } from '../../src/integrations/routes-api'
 import { SAMPLE_PLACE } from '../fixtures/places'
 
 const mockParse = vi.mocked(parseSearchIntent)
 const mockSearch = vi.mocked(searchPlaces)
 const mockReply = vi.mocked(sendReply)
+const mockGetOrigin = vi.mocked(getEffectiveOrigin)
+const mockRouteMatrix = vi.mocked(computeRouteMatrix)
 
 const mockEnv = {
   ANTHROPIC_API_KEY: 'test',
@@ -48,6 +58,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockParse.mockResolvedValue(DEFAULT_INTENT)
   mockSearch.mockResolvedValue([SAMPLE_PLACE])
+  mockGetOrigin.mockResolvedValue({ source: null })
+  mockRouteMatrix.mockResolvedValue([])
 })
 
 describe('runFlowE — 0 results', () => {
@@ -144,5 +156,109 @@ describe('runFlowE — error handling', () => {
     const err = await runFlowE('測試', 'reply-token', mockEnv).catch(e => e)
     expect(err).toBeInstanceOf(PlacesError)
     expect(err.userMessage).toContain('搜尋時遇到狀況')
+  })
+})
+
+describe('runFlowE — distance display', () => {
+  const placeWithCoords = {
+    ...SAMPLE_PLACE,
+    latitude: 25.08,
+    longitude: 121.56,
+    internal_id: 'coord-place',
+    notion_page_id: 'page-coord',
+    notion_url: 'https://www.notion.so/page-coord',
+  }
+
+  it('passes distance to carousel when origin and coords are available', async () => {
+    mockSearch.mockResolvedValue([placeWithCoords])
+    mockGetOrigin.mockResolvedValue({ lat: 25.05, lng: 121.52, source: 'home' })
+    mockRouteMatrix.mockResolvedValue([{ driving: { duration_minutes: 15, distance_meters: 3000 }, transit: null }])
+
+    await runFlowE('台北景點', 'reply-token', mockEnv, 'U001')
+
+    const carousel = mockReply.mock.calls[0][1][1] as unknown as { contents: unknown }
+    expect(JSON.stringify(carousel.contents)).toContain('🚗')
+    expect(JSON.stringify(carousel.contents)).toContain('15 分')
+  })
+
+  it('skips distance when userId is not provided', async () => {
+    mockSearch.mockResolvedValue([placeWithCoords])
+
+    await runFlowE('台北景點', 'reply-token', mockEnv)
+
+    expect(mockGetOrigin).not.toHaveBeenCalled()
+    expect(mockRouteMatrix).not.toHaveBeenCalled()
+    const carousel = mockReply.mock.calls[0][1][1] as unknown as { contents: unknown }
+    expect(JSON.stringify(carousel.contents)).not.toContain('🚗')
+  })
+
+  it('skips distance when effective origin is null', async () => {
+    mockSearch.mockResolvedValue([placeWithCoords])
+    mockGetOrigin.mockResolvedValue({ source: null })
+
+    await runFlowE('台北景點', 'reply-token', mockEnv, 'U001')
+
+    expect(mockRouteMatrix).not.toHaveBeenCalled()
+  })
+
+  it('does not throw when distance computation fails', async () => {
+    mockSearch.mockResolvedValue([placeWithCoords])
+    mockGetOrigin.mockResolvedValue({ lat: 25.05, lng: 121.52, source: 'home' })
+    mockRouteMatrix.mockRejectedValue(new Error('routes API down'))
+
+    await expect(runFlowE('台北景點', 'reply-token', mockEnv, 'U001')).resolves.toBeUndefined()
+    expect(mockReply).toHaveBeenCalledOnce()
+  })
+})
+
+describe('runFlowE — distance tie-breaking (ADR-023)', () => {
+  const makePlaceWithCoords = (id: string, lat: number, lng: number, name: string) => ({
+    ...SAMPLE_PLACE,
+    internal_id: id,
+    name,
+    latitude: lat,
+    longitude: lng,
+    notion_page_id: `page-${id}`,
+    notion_url: `https://www.notion.so/page-${id}`,
+  })
+
+  it('sorts by distance when keyword scores are equal', async () => {
+    const far   = makePlaceWithCoords('far',  25.2, 121.8, '遠的地點')
+    const close = makePlaceWithCoords('near', 25.1, 121.6, '近的地點')
+    mockSearch.mockResolvedValue([far, close])
+    mockGetOrigin.mockResolvedValue({ lat: 25.05, lng: 121.52, source: 'home' })
+    // computeRouteMatrix called with [far, close] in that order (no keyword rerank)
+    mockRouteMatrix.mockResolvedValue([
+      { driving: { duration_minutes: 40, distance_meters: 20000 }, transit: null },
+      { driving: { duration_minutes: 15, distance_meters: 5000 }, transit: null },
+    ])
+
+    await runFlowE('台北景點', 'reply-token', mockEnv, 'U001')
+
+    const carousel = mockReply.mock.calls[0][1][1] as unknown as { contents: { contents: Array<{ body: { contents: Array<{ text: string }> } }> } }
+    const firstName = carousel.contents.contents[0].body.contents[0].text
+    expect(firstName).toBe('近的地點')
+  })
+
+  it('preserves keyword score ordering when scores differ', async () => {
+    const highScore = { ...makePlaceWithCoords('hs', 25.2, 121.8, '滑水道樂園'), summary: '有滑水道設施' }
+    const lowScore  = makePlaceWithCoords('ls', 25.1, 121.6, '一般公園')
+    mockParse.mockResolvedValue({
+      ...DEFAULT_INTENT,
+      filters: { ...DEFAULT_INTENT.filters, free_text_keywords: ['滑水道'] },
+    })
+    mockSearch.mockResolvedValue([lowScore, highScore])
+    mockGetOrigin.mockResolvedValue({ lat: 25.05, lng: 121.52, source: 'home' })
+    // After keyword sort, highScore is [0], lowScore is [1]
+    mockRouteMatrix.mockResolvedValue([
+      { driving: { duration_minutes: 40, distance_meters: 20000 }, transit: null },
+      { driving: { duration_minutes: 5, distance_meters: 1000 }, transit: null },
+    ])
+
+    await runFlowE('有滑水道', 'reply-token', mockEnv, 'U001')
+
+    const carousel = mockReply.mock.calls[0][1][1] as unknown as { contents: { contents: Array<{ body: { contents: Array<{ text: string }> } }> } }
+    const firstName = carousel.contents.contents[0].body.contents[0].text
+    expect(firstName).toBe('滑水道樂園')
   })
 })

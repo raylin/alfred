@@ -28,6 +28,9 @@ export const N = {
   ai_inferred_fields: 'AI Inferred Fields',
   internal_id:        'Internal ID',
   created_by:         'Created By',
+  visit_count:        'Visit Count',
+  last_visited:       'Last Visited',
+  avg_rating:         'Avg Rating',
 } as const
 
 export type Category =
@@ -80,6 +83,27 @@ export type Place = {
   status?: Status
 }
 
+// --- Edit Operations (§4.3) ---
+
+export type EditOp =
+  | { property: 'Age Min' | 'Age Max' | 'Stay Minutes'; value: number | null }
+  | { property: 'Indoor/Outdoor'; value: IndoorOutdoor }
+  | { property: 'Energy Level'; value: EnergyLevel }
+  | { property: 'Fee Type'; value: FeeType }
+  | { property: 'Region'; value: Region }
+  | { property: 'Status'; value: Status }
+  | { property: 'Categories' | 'Seasons' | 'Source Type'; op: 'add' | 'remove' | 'set'; values: string[] }
+  | { property: 'Stroller Friendly' | 'Parking Friendly' | 'Has Restroom' | 'Has Nursing Room' | 'Reservation Needed' | 'Crowded On Weekends'; value: boolean }
+  | { property: 'Summary' | 'Fee Details'; op: 'append' | 'replace'; value: string }
+  | { property: 'Name'; value: string }  // detectable but rejected → triggers rename message
+
+export type VisitState =
+  | 'never_visited'
+  | 'visited_recently'
+  | 'visited_long_ago'
+  | 'highly_rated'
+  | 'loved_recently'
+
 export type SearchFilters = {
   indoor_outdoor?: string | null
   age?: number | null
@@ -89,4 +113,5 @@ export type SearchFilters = {
   fee_type?: string | null
   energy_level?: string | null
   free_text_keywords?: string[]
+  visit_state?: VisitState | null
 }
