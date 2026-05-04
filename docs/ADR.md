@@ -848,3 +848,29 @@ Wrap each add flow's entire body in a try/catch block. Log success before the fi
 - One catch block per add flow.
 - Error messages logged are PlacesError.message (Chinese UX strings) — no user input, safe to store.
 - The pattern is consistent across all add flows.
+
+---
+
+## ADR-036 — Visits DB title property is 'Name', not 'Title'
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Bug fix (visit logging production failure)
+
+### Context
+`createVisit` in `src/integrations/notion.ts` was sending `'Title'` as the property key for the Visits DB page title. Notion's API rejected this silently-ish (HTTP error), causing every visit log to fail in production. The Visits DB was created by migration `002-create-visits-db.ts` using `Name: { title: {} }`, so the property is named `'Name'`. The error was further obscured by the logEvent call logging a hardcoded string `'create_visit_failed'` instead of the actual Notion error message.
+
+### Decision
+- Change `'Title'` → `'Name'` in `createVisit`'s properties object.
+- Change the hardcoded error string to `err instanceof Error ? err.message.slice(0, 150) : String(err).slice(0, 150)` so the real Notion rejection reason appears in `/review`.
+- Split the `/review` guard from one rejection ("僅限管理員") into two: no userId (group/room context) → "只能在 1:1 對話使用"; wrong userId → "僅限管理員".
+
+### Alternatives considered
+- Rename the Visits DB column back to `Title`: would break migration idempotency and affect Notion UI already set up.
+- Catch at a higher level and re-map the error: obscures root cause further.
+
+### Consequences
+- Visit logging now works correctly in production.
+- The `/review` error detail for any future Notion failures will show the real HTTP error body instead of `'create_visit_failed'`.
+- Group users who type `/review` get a clear 1:1-only message rather than a misleading "管理員" rejection.
+- Lesson: generic error string constants in logEvent calls mask real failure reasons — always prefer `err.message` at the catch site.

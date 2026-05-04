@@ -145,7 +145,11 @@ type StoredEvent = {
 }
 
 async function handleReview(replyToken: string, env: Env, userId?: string): Promise<void> {
-  if (!userId || userId !== env.PM_LINE_USER_ID) {
+  if (!userId) {
+    await sendReply(replyToken, [{ type: 'text', text: '/review 只能在 1:1 對話使用。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
+    return
+  }
+  if (userId !== env.PM_LINE_USER_ID) {
     await sendReply(replyToken, [{ type: 'text', text: '這指令僅限管理員。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }

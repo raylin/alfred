@@ -163,11 +163,11 @@ describe('handleSlashCommand', () => {
       expect(sentText).toContain('管理員')
     })
 
-    it('rejects unauthenticated (no userId) with 管理員 message', async () => {
+    it('rejects group context (no userId) with 1:1 message', async () => {
       const result = await handleSlashCommand('/review', 'reply-token', mockEnv)
       expect(result).toEqual({ type: 'replied' })
       const sentText = (mockSendReply.mock.calls[0][1][0] as { text: string }).text
-      expect(sentText).toContain('管理員')
+      expect(sentText).toContain('1:1')
     })
 
     it('replies with no-events message when ring buffer is empty', async () => {

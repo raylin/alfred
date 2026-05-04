@@ -82,7 +82,7 @@ describe('createVisit', () => {
     const call = mockFetch.mock.calls.find(c => (c[0] as string).includes('/pages') && c[1]?.method === 'POST')
     const body = JSON.parse(call![1]!.body as string)
     expect(body.parent.database_id).toBe('visits-db-id')
-    expect(body.properties['Title'].title[0].text.content).toContain('大湖公園')
+    expect(body.properties['Name'].title[0].text.content).toContain('大湖公園')
     expect(body.properties['Place'].relation[0].id).toBe('place-page-aaa')
     expect(body.properties['Visited On'].date.start).toBe('2026-05-04')
     expect(body.properties['Rating'].number).toBe(4)

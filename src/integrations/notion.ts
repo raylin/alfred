@@ -573,7 +573,7 @@ export async function createVisit(
   const title = formatVisitTitle(row.place_name, date)
 
   const properties: Record<string, unknown> = {
-    'Title': { title: rt(title) },
+    'Name': { title: rt(title) },
     'Place': { relation: [{ id: row.place_notion_page_id }] },
     'Visited On': { date: { start: date } },
   }

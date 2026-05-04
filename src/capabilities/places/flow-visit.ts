@@ -60,7 +60,8 @@ async function recordVisitAndReply(
     }, env)
   } catch (err) {
     console.error('[flow-visit] createVisit failed', err)
-    await logEvent(env, { type: 'places.visit.log', user_id: userId, duration_ms: Date.now() - t0, outcome: 'error', error: 'create_visit_failed' })
+    const errorMsg = err instanceof Error ? err.message.slice(0, 150) : String(err).slice(0, 150)
+    await logEvent(env, { type: 'places.visit.log', user_id: userId, duration_ms: Date.now() - t0, outcome: 'error', error: errorMsg })
     await sendReply(replyToken, [{ type: 'text', text: '記錄時遇到狀況，請再試一次。' }], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
     return
   }
