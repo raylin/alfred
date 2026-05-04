@@ -105,6 +105,33 @@ npm test
 npm run deploy
 ```
 
+### Migrations
+
+Schema changes are managed via idempotent migration scripts. Run migrations when the spec says to (Phase 1.5 onward).
+
+**Run all pending migrations:**
+
+```bash
+npx tsx scripts/migrations/_runner.ts
+```
+
+**Preview pending without making changes:**
+
+```bash
+npx tsx scripts/migrations/_runner.ts --dry-run
+```
+
+**Re-run a specific migration (debug):**
+
+```bash
+npx tsx scripts/migrations/_runner.ts --only 001-add-visit-summary-fields
+```
+
+The runner auto-creates a `Migrations` DB in Notion under `NOTION_PARENT_PAGE_ID` on first run.
+Each migration's `up()` function must be idempotent — safe to run twice.
+
+---
+
 ## Architecture
 
 See `docs/alfred-phase-0-1-spec.md` for the full spec.

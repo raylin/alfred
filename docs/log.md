@@ -1,3 +1,11 @@
+## 2026-05-04 — Task M0 complete: Migration Runner Infrastructure
+
+`scripts/migrations/_types.ts` (ScriptEnv + Migration interface) and `scripts/migrations/_runner.ts` built. Runner finds or auto-creates a `Migrations` DB under `NOTION_PARENT_PAGE_ID`, reads applied migration IDs via raw fetch (Notion API 2022-06-28, ADR-017), then runs pending migrations sequentially and records each in the DB. Supports `--dry-run` and `--only <id>` CLI flags. Migrations DB placed under NOTION_PARENT_PAGE_ID (ADR-018). `npx tsx scripts/migrations/_runner.ts --dry-run` connects, finds the DB, and reports 0 pending. README updated with migration instructions. 246 tests pass. Awaiting user acceptance.
+
+## 2026-05-04 — Phase 1.5 started: spec received and archived
+
+Phase 1.5 spec received from PM Claude. Archived to docs/handoffs/2026-05-04-1540-phase-1-5-spec.md, saved as docs/alfred-phase-1-5-spec.md. Stories H-N, schema §2, migration runner §3, and task order M0→M1→M2→18→17→13→14→15→16→20→19→21 confirmed. Three blocking questions surfaced (Routes API key, /review PM userId, Alfred-設定 Notion page). Awaiting PM answers before starting Task M0.
+
 ## 2026-05-04 — Task 12 complete: 5 acceptance-test fixes
 
 URL bypass router (ADR-014): pure URL messages skip LLM intent router, fixing IG URL → unknown bug. Search keyword expansion: added 幫我/找/找個/我想去/我要去/給我/有什麼 to isSearchQuery. Google Places locationBias (Taipei, 50km) + TW address safety net filters non-Taiwan results (ADR-015). resolveGooglePlace: Stories A/D/F now run Google Places textSearch after Claude extraction to get google_place_id + precise coords + dedup — supersedes ADR-010 (ADR-016). search-parser prompt updated to exclude meta-words from free_text_keywords. ADR-014/015/016 recorded. 246 tests pass (25 new). TypeScript clean. Awaiting acceptance + deploy.

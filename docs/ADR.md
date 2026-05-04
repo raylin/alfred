@@ -402,3 +402,49 @@ Create `src/capabilities/places/resolve-google-place.ts` with `resolveGooglePlac
 - If Claude extracted the wrong name, resolution may match a different place — wrong `google_place_id` attached. The fuzzy match (extracted name contains Google name, or vice versa) mitigates this, but doesn't eliminate it.
 - Resolution failure is non-fatal: returns null, flow continues without `google_place_id`, no dedup for that entry.
 - ADR-010 ("Story A and Story D: no dedup") is now superseded by this ADR for the cases where resolution succeeds.
+
+---
+
+## ADR-017 — Migration runner uses raw fetch for Notion queries; SDK only for create/list
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task M0
+
+### Context
+`@notionhq/client` v5.20.0 uses Notion API version `2025-09-03`, which renamed `databases.query` to `dataSources.query` with a `data_source_id` parameter. Databases created via `databases.create` (legacy endpoint) are not accessible via the new `dataSources.query` endpoint — the SDK returns a 404 "object not found" error even though the integration created the database itself. The production `src/integrations/notion.ts` uses raw fetch with Notion API version `2022-06-28`, which is stable and has no such issue.
+
+### Decision
+In `scripts/migrations/_runner.ts`, use the Notion SDK (`@notionhq/client`) only for `blocks.children.list` (finding the Migrations DB) and `databases.create` (creating it). For reading applied migrations and recording new ones, use raw `fetch` calls to `https://api.notion.com/v1` with `Notion-Version: 2022-06-28`, matching the production integration.
+
+### Alternatives considered
+- Pass `notionVersion: '2022-06-28'` to the SDK Client constructor: the v5 TypeScript types don't expose `databases.query`, so it would require `as any` casts throughout.
+- Use `dataSources.create` (new API) instead of `databases.create`: `dataSources.create` requires a parent `database_id`, not a `page_id` — the Migrations DB must sit under the parent page, not inside another database.
+- Share the newly created DB manually before first query (require user action after auto-create): poor UX and error-prone; raw fetch avoids the need entirely.
+
+### Consequences
+- `NOTION_VERSION = '2022-06-28'` is duplicated between scripts runner and `src/integrations/notion.ts`. Acceptable — these are different contexts (scripts vs. Workers).
+- If Notion ever deprecates the 2022-06-28 API, both the runner and the production integration need updating.
+- Migrations can be queried immediately after auto-creation without manual "share with integration" step.
+
+---
+
+## ADR-018 — Migrations DB lives under NOTION_PARENT_PAGE_ID (same parent as Place DB)
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task M0
+
+### Context
+The spec (§3.3) says the Migrations DB should live under "Alfred — 設定" page. However, Phase 1.5 blocking question 3 confirmed that we reuse the existing `NOTION_PARENT_PAGE_ID` (ID: `356d06a9b2ec8009838cd212d2f17715`) rather than creating a new "Alfred — 設定" page. This is the same parent page that houses the Place DB.
+
+### Decision
+`ensureMigrationsDb` in `_runner.ts` looks for and creates the Migrations DB under `NOTION_PARENT_PAGE_ID`. No separate "Alfred — 設定" page is created.
+
+### Alternatives considered
+- Create "Alfred — 設定" page first, then put Migrations DB under it: adds another Notion setup step and another env var.
+- Store migration applied state in a local JSON file: doesn't require Notion at all, but breaks if run from multiple machines.
+
+### Consequences
+- The Migrations DB sits alongside the Place DB under one parent page — simpler mental model.
+- If Phase 5 requires multi-Notion-workspace, the assumption of a single parent page will need revisiting.
