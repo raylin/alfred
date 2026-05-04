@@ -1,3 +1,11 @@
+## 2026-05-04 18:20 — Task 5 complete: Google Places Integration
+
+google-places.ts written: textSearch, getPlaceDetails, parseGoogleMapsUrl (full + short URLs via redirect: follow + res.url), toGooglePlacesContext. 16 unit tests covering 6 URL formats and mocked API responses. 69 tests total. GOOGLE_PLACES_API_KEY stored (6/6 secrets complete). Awaiting user acceptance.
+
+## 2026-05-04 17:55 — Task 5 started: Google Places Integration
+
+GOOGLE_PLACES_API_KEY stored as Cloudflare secret (6/6 secrets complete). Building google-places.ts: textSearch, getPlaceDetails, parseGoogleMapsUrl.
+
 ## 2026-05-04 17:40 — Task 5.5 complete: LLM Intent Router
 
 _registry.ts, intent-router.ts (Haiku, confidence 0.6 threshold), unknown-handler.ts, slash-commands.ts (/help + /place), index.ts wired. ADR-004 recorded. 21 new tests, 53 total. TypeScript clean. Awaiting user acceptance before commit.
