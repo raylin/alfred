@@ -2,6 +2,10 @@
 
 google-places.ts written: textSearch, getPlaceDetails, parseGoogleMapsUrl (full + short URLs via redirect: follow + res.url), toGooglePlacesContext. 16 unit tests covering 6 URL formats and mocked API responses. 69 tests total. GOOGLE_PLACES_API_KEY stored (6/6 secrets complete). Awaiting user acceptance.
 
+## 2026-05-04 18:45 — Task 6 complete: Story A URL Input Flow
+
+html-extract.ts, url-utils.ts, input-detect.ts, errors.ts, flex-message.ts, flow-a-url.ts, handler.ts built. sendReply updated to accept Flex Messages. index.ts wired to real placesHandler. ADR-005 (regex HTML strip). 39 new tests, 108 total. Awaiting user acceptance + manual LINE test.
+
 ## 2026-05-04 17:55 — Task 5 started: Google Places Integration
 
 GOOGLE_PLACES_API_KEY stored as Cloudflare secret (6/6 secrets complete). Building google-places.ts: textSearch, getPlaceDetails, parseGoogleMapsUrl.

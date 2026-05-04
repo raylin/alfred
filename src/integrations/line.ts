@@ -51,6 +51,14 @@ export type LineWebhookBody = {
 
 export type LineTextMessage = { type: 'text'; text: string }
 
+export type LineFlexMessage = {
+  type: 'flex'
+  altText: string
+  contents: Record<string, unknown>
+}
+
+export type LineMessage = LineTextMessage | LineFlexMessage
+
 // --- Helpers ---
 
 export function getChatId(source: LineSource): string {
@@ -82,7 +90,7 @@ export async function startLoadingIndicator(chatId: string, accessToken: string)
 
 export async function sendReply(
   replyToken: string,
-  messages: LineTextMessage[],
+  messages: LineMessage[],
   accessToken: string,
 ): Promise<void> {
   const res = await fetch(`${LINE_API}/message/reply`, {

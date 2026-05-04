@@ -13,6 +13,7 @@ import {
 import { handleSlashCommand } from './core/slash-commands'
 import { routeIntent } from './core/intent-router'
 import { handleUnknown } from './core/unknown-handler'
+import { placesHandler } from './capabilities/places/handler'
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 
@@ -70,13 +71,7 @@ async function dispatchCapability(
   env: Env,
 ): Promise<void> {
   if (capability === 'places') {
-    // TODO Task 6+: await placesHandler(input, replyToken, env)
-    console.log('[dispatch] places capability triggered', { input_preview: input.slice(0, 50) })
-    await sendReply(
-      replyToken,
-      [{ type: 'text', text: `收到！正在整理「${input.slice(0, 30)}」…（功能建置中）` }],
-      env.LINE_CHANNEL_ACCESS_TOKEN,
-    )
+    await placesHandler(input, replyToken, env)
     return
   }
   await handleUnknown(replyToken, env.LINE_CHANNEL_ACCESS_TOKEN)

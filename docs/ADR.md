@@ -81,6 +81,29 @@ Remove the custom pool from `vitest.config.ts` and use `environment: 'node'` (vi
 
 ---
 
+## ADR-005 — Regex-based HTML stripping instead of node-html-parser
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 6
+
+### Context
+`lib/html-extract.ts` needs to convert raw blog HTML to clean text for Claude. The spec says "use `node-html-parser` or similar Workers-compatible". Two options: add the `node-html-parser` npm package, or use a regex pipeline.
+
+### Decision
+Use regex-based stripping: remove script/style/nav/footer blocks, collapse block tags to newlines, strip remaining tags, decode entities, normalise whitespace, truncate. No new npm dependency.
+
+### Alternatives considered
+- `node-html-parser` — pure JS, Workers-compatible, but adds a package; provides DOM-style access which isn't needed here (we only want text).
+- `HTMLRewriter` (Cloudflare-native) — most efficient for Workers but streams HTML via a Response object, making it harder to unit test synchronously.
+
+### Consequences
+- Zero new dependencies; easier to test (pure function).
+- Won't handle malformed HTML as gracefully as a real parser, but blog content is almost always valid enough for our use case.
+- If edge cases arise (e.g., inline script with `>` chars), can swap to `node-html-parser` later — the public API (`stripHtml(html, maxLength)`) stays the same.
+
+---
+
 ## ADR-004 — LLM-based intent router with 0.6 confidence threshold and parallel slash commands
 
 - **Date:** 2026-05-04
