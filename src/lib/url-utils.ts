@@ -9,11 +9,11 @@ export function isGoogleMapsUrl(text: string): boolean {
   )
 }
 
-export async function fetchWithTimeout(url: string, timeoutMs = 10_000): Promise<Response> {
+export async function fetchWithTimeout(url: string, timeoutMs = 10_000, options?: RequestInit): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { signal: controller.signal })
+    return await fetch(url, { ...options, signal: controller.signal })
   } finally {
     clearTimeout(timer)
   }

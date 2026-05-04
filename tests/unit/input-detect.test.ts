@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectInputType, isSearchQuery } from '../../src/capabilities/places/input-detect'
+import { detectInputType, isSearchQuery, isInstagramUrl } from '../../src/capabilities/places/input-detect'
 
 describe('detectInputType', () => {
   it('classifies Google Maps /maps/ URL as google-maps-url', () => {
@@ -12,6 +12,14 @@ describe('detectInputType', () => {
 
   it('classifies goo.gl/maps as google-maps-url', () => {
     expect(detectInputType('https://goo.gl/maps/XXXXX')).toBe('google-maps-url')
+  })
+
+  it('classifies Instagram URL as instagram-url', () => {
+    expect(detectInputType('https://www.instagram.com/reel/ABC123/')).toBe('instagram-url')
+  })
+
+  it('classifies instagram.com without www as instagram-url', () => {
+    expect(detectInputType('https://instagram.com/p/DEF456/')).toBe('instagram-url')
   })
 
   it('classifies regular https URL as url', () => {
@@ -32,6 +40,24 @@ describe('detectInputType', () => {
 
   it('trims whitespace before detecting', () => {
     expect(detectInputType('  https://example.com  ')).toBe('url')
+  })
+})
+
+describe('isInstagramUrl', () => {
+  it('detects www.instagram.com', () => {
+    expect(isInstagramUrl('https://www.instagram.com/reel/ABC123/')).toBe(true)
+  })
+
+  it('detects instagram.com without www', () => {
+    expect(isInstagramUrl('https://instagram.com/p/XYZ/')).toBe(true)
+  })
+
+  it('returns false for regular URL', () => {
+    expect(isInstagramUrl('https://example.com/photo')).toBe(false)
+  })
+
+  it('returns false for Google Maps URL', () => {
+    expect(isInstagramUrl('https://maps.app.goo.gl/abc')).toBe(false)
   })
 })
 

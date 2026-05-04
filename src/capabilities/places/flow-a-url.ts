@@ -53,21 +53,25 @@ export async function runFlowA(
     throw new PlacesError(`已經整理好了，但寫入 Notion 失敗。錯誤：${msg}`)
   }
 
-  // 5. Write to KV — best-effort, failure must not block reply (§5)
+  // 5. Write to KV — best-effort, each write independent so one failure can't block the other
   try {
     await writeRawExtraction(env, place.internal_id, {
       raw_input: url,
       raw_html: text,
       extracted_at: new Date().toISOString(),
     })
-    if (userId !== undefined && chatId !== undefined) {
-      await writeUserLastPlace(env, userId, place.internal_id, chatId)
-    }
   } catch (err) {
-    console.error('[flow-a] KV write failed (non-fatal)', err)
+    console.error('[flow-a] KV writeRawExtraction failed (non-fatal)', err)
+  }
+  if (userId !== undefined && chatId !== undefined) {
+    try {
+      await writeUserLastPlace(env, userId, place.internal_id, chatId)
+    } catch (err) {
+      console.error('[flow-a] KV writeUserLastPlace failed (non-fatal)', err)
+    }
   }
 
-  // 6. Send Flex Message reply
+  // 6. Send Flex Message reply (chatId enables push fallback if reply token expired)
   const fullPlace = { ...place, notion_url: notionResult.url, notion_page_id: notionResult.notion_page_id }
-  await sendReply(replyToken, [buildDraftCard(fullPlace)], env.LINE_CHANNEL_ACCESS_TOKEN)
+  await sendReply(replyToken, [buildDraftCard(fullPlace)], env.LINE_CHANNEL_ACCESS_TOKEN, chatId)
 }

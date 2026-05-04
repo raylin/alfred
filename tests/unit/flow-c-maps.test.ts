@@ -16,6 +16,10 @@ vi.mock('../../src/integrations/notion', () => ({
 vi.mock('../../src/integrations/line', () => ({
   sendReply: vi.fn().mockResolvedValue(undefined),
 }))
+vi.mock('../../src/capabilities/places/duplicate-check', () => ({
+  checkDuplicate: vi.fn().mockResolvedValue({ found: false }),
+  writeDedupKV: vi.fn().mockResolvedValue(undefined),
+}))
 
 import { runFlowC } from '../../src/capabilities/places/flow-c-maps'
 import { PlacesError } from '../../src/capabilities/places/errors'
@@ -23,6 +27,7 @@ import { parseGoogleMapsUrl, getPlaceDetails, textSearch, toGooglePlacesContext 
 import { extractFromGooglePlaces } from '../../src/capabilities/places/extract'
 import { createPlace } from '../../src/integrations/notion'
 import { sendReply } from '../../src/integrations/line'
+import { checkDuplicate, writeDedupKV } from '../../src/capabilities/places/duplicate-check'
 import { SAMPLE_PLACE } from '../fixtures/places'
 
 const mockParse = vi.mocked(parseGoogleMapsUrl)
@@ -32,6 +37,8 @@ const mockContext = vi.mocked(toGooglePlacesContext)
 const mockExtract = vi.mocked(extractFromGooglePlaces)
 const mockCreate = vi.mocked(createPlace)
 const mockReply = vi.mocked(sendReply)
+const mockCheckDuplicate = vi.mocked(checkDuplicate)
+const mockWriteDedupKV = vi.mocked(writeDedupKV)
 
 const mockEnv = {
   ANTHROPIC_API_KEY: 'test',
@@ -72,6 +79,8 @@ beforeEach(() => {
   mockContext.mockReturnValue(CONTEXT)
   mockExtract.mockResolvedValue(SAMPLE_PLACE)
   mockCreate.mockResolvedValue(NOTION_RESULT)
+  mockCheckDuplicate.mockResolvedValue({ found: false })
+  mockWriteDedupKV.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -194,5 +203,40 @@ describe('runFlowC — error handling', () => {
 
     await expect(runFlowC(MAPS_URL, 'reply-token', mockEnv)).resolves.toBeUndefined()
     expect(mockReply).toHaveBeenCalledOnce()
+  })
+})
+
+describe('runFlowC — dedup check', () => {
+  beforeEach(() => {
+    mockParse.mockResolvedValue(PARSED_WITH_ID)
+    mockDetails.mockResolvedValue(DETAILS)
+    mockContext.mockReturnValue(CONTEXT)
+    mockExtract.mockResolvedValue(SAMPLE_PLACE)
+    mockCreate.mockResolvedValue(NOTION_RESULT)
+  })
+
+  it('sends dedup card and returns early when duplicate found', async () => {
+    mockCheckDuplicate.mockResolvedValueOnce({ found: true, notion_page_id: 'page-xyz', internal_id: 'int-1', name: '兒童新樂園' })
+
+    await runFlowC(MAPS_URL, 'reply-token', mockEnv)
+
+    expect(mockExtract).not.toHaveBeenCalled()
+    expect(mockCreate).not.toHaveBeenCalled()
+    const msg = mockReply.mock.calls[0][1][0]
+    expect(msg.type).toBe('flex')
+    const altText = (msg as { type: string; altText: string }).altText
+    expect(altText).toContain('已經存過了')
+  })
+
+  it('writes dedup KV after successful Notion write', async () => {
+    await runFlowC(MAPS_URL, 'reply-token', mockEnv)
+
+    expect(mockWriteDedupKV).toHaveBeenCalledWith(
+      mockEnv,
+      'ChIJabc',
+      'page-abc',
+      expect.any(String),
+      expect.any(String),
+    )
   })
 })

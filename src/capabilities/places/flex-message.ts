@@ -132,6 +132,46 @@ export function buildDraftCard(place: Place, note?: string): LineFlexMessage {
   }
 }
 
+export function buildDedupCard(name: string): LineFlexMessage {
+  return {
+    type: 'flex',
+    altText: `「${name}」已經存過了，要更新嗎？`,
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: 'md',
+        contents: [
+          { type: 'text', text: `「${name}」已經存過了`, weight: 'bold', size: 'md', wrap: true, color: '#111111' },
+          { type: 'text', text: '要更新資訊，還是跳過？', size: 'sm', color: '#888888', margin: 'sm', wrap: true },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'horizontal',
+        spacing: 'sm',
+        paddingAll: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            action: { type: 'postback', label: '更新', data: 'dedup:update' },
+          },
+          {
+            type: 'button',
+            style: 'secondary',
+            height: 'sm',
+            action: { type: 'postback', label: '不用', data: 'dedup:skip' },
+          },
+        ],
+      },
+    },
+  }
+}
+
 function buildSearchBubble(place: Place): Record<string, unknown> {
   const metaParts: string[] = []
   if (place.categories.length > 0) metaParts.push(place.categories[0])
