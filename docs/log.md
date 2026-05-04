@@ -1,3 +1,7 @@
+## 2026-05-04 15:10 — Task 2 deployed; awaiting LINE webhook URL configuration
+
+Both LINE secrets stored in Cloudflare. KV namespace created (id: 1a7640431a8642239223d4243b55f375). Deployed to alfred.raylin.cc (custom domain, auto-provisioned DNS + TLS). Health endpoint verified via forced resolve. wrangler.toml updated from routes→custom_domain. Waiting for PM to set LINE webhook URL to https://alfred.raylin.cc/line/webhook for live echo test.
+
 ## 2026-05-04 15:00 — Task 2 code complete; blocked on wrangler login + LINE access token
 
 LINE webhook skeleton built: signature verification middleware (Web Crypto), LINE API integration module, echo handler, welcome message on follow/join, loading indicator. TypeScript clean. Committed to main. Waiting for user to run `wrangler login` and provide LINE_CHANNEL_ACCESS_TOKEN before verification can proceed.
