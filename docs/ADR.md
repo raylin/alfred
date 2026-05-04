@@ -203,3 +203,129 @@ Notion's database query API does not support relevance scoring. For Story E sear
 - Keyword scoring is simple substring match — doesn't handle stemming or synonyms, but sufficient for Chinese place names/summaries.
 - If all results have zero keyword score, order falls back to last_edited_time (from Notion sort).
 - Search observability: every query logs `{ type: 'search_query', parsed_filters, query_intent_summary }` and `{ type: 'search_result', candidate_count }` for future quality analysis.
+
+---
+
+## ADR-009 — Instagram URL: OG fetch with facebookexternalhit UA, description length gate
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 10
+
+### Context
+Instagram blocks most crawlers with login redirects. Instagram Reels/posts serve OG meta tags (`og:title`, `og:description`) to the `facebookexternalhit` User-Agent used by the Facebook scraper. The `og:description` on Reels is often sparse (≤ 30 chars) — it may be just an emoji or a hashtag with no place name — so we can't blindly send it to Claude. We need a quality gate.
+
+### Decision
+`flow-d-instagram.ts`: fetch with `User-Agent: facebookexternalhit/1.1 ...` → regex-extract `og:description` → if length ≥ 30 chars, send to Claude (`extractFromHtml`) → Flex reply; else send fallback: "IG 連結我目前還沒辦法直接讀，可以截圖傳給我，或直接告訴我地點名稱。"
+
+The fallback message references "截圖傳給我" intentionally — it primes users for the upcoming Task 11 (image input).
+
+### Alternatives considered
+- Parse og:title + og:description together: title is even more sparse (usually just place name). og:description alone carries more context.
+- Use Puppeteer / headless browser: not available in Cloudflare Workers runtime.
+- Require users to share a caption text instead of IG URL: higher user friction.
+- Always attempt Claude even with short description: wastes ~$0.001 per request and produces poor extractions that the user then has to fix.
+
+### Consequences
+- Works for many IG posts that include a location description in the caption (≥ 30 chars).
+- Fails gracefully for short-caption Reels — user gets a clear fallback with a workaround.
+- No dedup check for Story D (no `google_place_id` available from OG tags alone) — same limitation as Story A.
+- IG may change OG behavior at any time; the fallback path handles any future breakage safely.
+
+---
+
+## ADR-010 — Story A and Story D: no dedup check (no google_place_id)
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 10
+
+### Context
+Dedup relies on `google_place_id` as the stable unique identifier for a physical location. Story A (blog URL) and Story D (Instagram URL) extract from HTML/OG content, which never contains a `google_place_id`. Without this key, we cannot check KV or Notion for a prior entry.
+
+### Decision
+Skip the dedup check entirely for Stories A and D. Accept that duplicate entries may be created if the user submits a blog URL and an IG URL for the same place. Family can de-duplicate manually in Notion.
+
+### Alternatives considered
+- Use place name as dedup key: name is user-visible text with inconsistent formatting (spaces, Traditional/Simplified variants, abbreviations). High false-positive and false-negative rate.
+- Call Google Places textSearch after Claude extraction to get a `google_place_id`, then check dedup: adds a Google Places API call to every Story A/D flow. Increases latency (~500ms) and API cost. Deferred to Phase 2 if dedup quality becomes a real problem.
+
+### Consequences
+- Story A and Story D may create duplicate Notion entries for the same physical place.
+- Stories B and C (which have `google_place_id` from Google Places) are fully protected.
+- The limitation is acceptable for Phase 0+1 given the low volume of family use.
+
+---
+
+## ADR-011 — Reply token expiry: push API fallback, not retry
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 10
+
+### Context
+LINE reply tokens expire ~30 seconds after the webhook event. For flows with heavy processing (Claude extraction + Google Places + Notion write), the token may expire before `sendReply` is called. The LINE API returns HTTP 400 with body `"Invalid reply token"` in this case. We need a recovery strategy.
+
+### Decision
+In `sendReply`, detect 400 + "Invalid reply token" and fall back to `sendPush(chatId, messages, accessToken)` if a `chatId` was provided by the caller. Callers (flow-a, flow-b, flow-c, flow-d) pass `chatId` as the optional 4th argument.
+
+### Alternatives considered
+- Retry `sendReply` with a new token: LINE tokens are single-use and expire — retrying the same token always fails.
+- Store messages and retry on next user interaction: complex, bad UX (user doesn't know why there's no immediate response).
+- Switch entirely to push API: push has different rate limits and billing implications. Reply API is free for bot replies; push is free for verified bots but rate-limited differently. Reply token is the preferred path when available.
+- Do nothing (silently drop the message): bad UX — user sees nothing after submitting a place.
+
+### Consequences
+- Users in fast flows (Story B/C plain name lookup) almost never hit the 30s limit.
+- Users in slow flows (Story A with slow blog fetch + Claude) may occasionally trigger the push fallback — they'll still receive the Flex card, just via push instead of reply.
+- Story E (search) does not pass `chatId` to `sendReply` (search is fast — intent parse + Notion query fits well under 30s). No change needed.
+- Push API requires the bot to be a friend of the user or a group member — this is already satisfied since we only have chatIds from events in active conversations.
+
+---
+
+## ADR-012 — Image messages bypass LLM intent router; `accepts_images` forward-compat field in registry
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 11
+
+### Context
+The LLM intent router (Haiku) classifies user messages by their text content. Image messages have no text, so the router cannot be used. A design decision is needed for: (a) how to dispatch image messages today, and (b) how to extend the registry for future capabilities that also handle images.
+
+### Decision
+1. **Direct dispatch:** In `index.ts`, detect `message.type === 'image'` before the text routing block. Skip `handleSlashCommand` and `routeIntent`; call `placesImageHandler` directly. This is the only places-capable path in Phase 0+1.
+2. **`accepts_images?: boolean` in `Capability` type** in `_registry.ts`. The `places` capability is set to `accepts_images: true`. When a future capability (e.g., shopping receipts) also needs to handle images, `index.ts` will dispatch to the first capability with `accepts_images === true`. In Phase 0+1 with one capability, this is equivalent to hardcoding `places` — the field is a forward-compat annotation only, not yet used in dispatch logic.
+
+### Alternatives considered
+- Route image through Haiku with a "this is an image" text prompt: adds latency, wastes tokens, doesn't add value.
+- Use image captioning first (a separate LLM call to describe the image), then route the description: even more latency; Claude Sonnet Vision can classify AND extract in a single call.
+- Always route all media types to places: correct for Phase 0+1 but would silently swallow images if a second non-places capability is added without updating the dispatch logic.
+
+### Consequences
+- Image messages are dispatched to `places` with ~zero routing overhead.
+- The `accepts_images` field makes the registry self-documenting and provides a migration path when a second image-capable capability is added.
+- Non-image, non-text messages (stickers, audio, video, location) still hit the `!isTextMessage` guard and are silently ignored.
+
+---
+
+## ADR-013 — `raw_extraction` KV does not store base64 image body
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 11
+
+### Context
+`writeRawExtraction` stores input data and the Claude response in KV for debugging and future model improvement. For image messages, the naive approach is to include the base64-encoded image body in `raw_input`. A typical smartphone photo is 2–8 MB; base64 encoding adds ~33% overhead, bringing it to 2.7–11 MB. Cloudflare KV enforces a 25 MB per-value limit — a single large photo would exhaust 40–44% of that limit, and a burst of photos would fail or truncate.
+
+### Decision
+Store only metadata in `raw_input` (LINE message ID, MIME type, size_bytes) instead of the base64 body. Store the extracted `Place` JSON in `raw_claude_response`. Do not store the image itself.
+
+### Alternatives considered
+- Store image in R2 object storage instead of KV: architecturally correct but adds a new Cloudflare service binding (R2 bucket) and infra setup that isn't needed for Phase 0+1 debugging. Deferred to Phase 2 if image audit becomes necessary.
+- Store image in KV with a per-photo check (skip if > 5MB): adds conditional logic and still risks large-photo failures.
+- Don't write any raw extraction for images: loses the debugging trace entirely.
+
+### Consequences
+- The LINE message ID (`line_message_id`) allows the image to be re-fetched from LINE's Content API during its retention window (~1 week for standard bots, longer for PREMIUM).
+- After retention expiry, the original image is unrecoverable from our storage — acceptable for Phase 0+1 debugging.
+- KV value size for image `raw_extraction` entries is ~100 bytes (metadata + Place JSON), vs. up to 11 MB for the base64 body.

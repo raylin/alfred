@@ -4,11 +4,13 @@ export type Capability = {
   examples_positive: string[]
   examples_negative: string[]
   keywords: string[]
+  accepts_images?: boolean
 }
 
 export const capabilities: Capability[] = [
   {
     id: 'places',
+    accepts_images: true,
     description: '記錄或搜尋親子景點（公園、餐廳、遊樂場、步道等）',
     examples_positive: [
       '大湖公園划船',

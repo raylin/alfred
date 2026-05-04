@@ -5,14 +5,15 @@ vi.mock('../../src/integrations/anthropic', () => ({
   MODELS: { extraction: 'claude-sonnet-4-6', search: 'claude-haiku-4-5-20251001' },
   createClient: vi.fn(() => ({})),
   chatJson: vi.fn(),
+  chatJsonWithImage: vi.fn(),
 }))
 
 vi.mock('../../src/lib/uuid', () => ({
   generateUuid: vi.fn(() => 'fixed-uuid'),
 }))
 
-import { extractFromHtml, extractFromGooglePlaces } from '../../src/capabilities/places/extract'
-import { chatJson } from '../../src/integrations/anthropic'
+import { extractFromHtml, extractFromGooglePlaces, extractFromImage, NoPlaceDetectedError } from '../../src/capabilities/places/extract'
+import { chatJson, chatJsonWithImage } from '../../src/integrations/anthropic'
 import {
   RICH_RAW_RESPONSE,
   VAGUE_RAW_RESPONSE,
@@ -22,6 +23,7 @@ import {
 } from '../fixtures/extraction'
 
 const mockChatJson = vi.mocked(chatJson)
+const mockChatJsonWithImage = vi.mocked(chatJsonWithImage)
 const mockEnv = { ANTHROPIC_API_KEY: 'test-key' } as unknown as Env
 
 beforeEach(() => {
@@ -189,5 +191,58 @@ describe('extractFromGooglePlaces', () => {
     const place = await extractFromGooglePlaces('某公園', noWebsite, ['朋友推薦'], mockEnv)
 
     expect(place.source_url).toBeNull()
+  })
+})
+
+// --- extractFromImage ---
+
+describe('extractFromImage', () => {
+  it('returns a Place from successful image extraction', async () => {
+    mockChatJsonWithImage.mockResolvedValueOnce(RICH_RAW_RESPONSE)
+
+    const place = await extractFromImage('aGVsbG8=', 'image/jpeg', mockEnv)
+
+    expect(place.name).toBe('兒童新樂園')
+    expect(place.categories).toEqual(['遊樂園'])
+  })
+
+  it('sets source_type to [] (empty — semantic source unknown for images)', async () => {
+    mockChatJsonWithImage.mockResolvedValueOnce(RICH_RAW_RESPONSE)
+
+    const place = await extractFromImage('aGVsbG8=', 'image/jpeg', mockEnv)
+
+    expect(place.source_type).toEqual([])
+  })
+
+  it('sets source_url to null', async () => {
+    mockChatJsonWithImage.mockResolvedValueOnce(RICH_RAW_RESPONSE)
+
+    const place = await extractFromImage('aGVsbG8=', 'image/jpeg', mockEnv)
+
+    expect(place.source_url).toBeNull()
+  })
+
+  it('throws NoPlaceDetectedError when Claude returns { error: "no_place_detected" }', async () => {
+    mockChatJsonWithImage.mockResolvedValueOnce({ error: 'no_place_detected' })
+
+    await expect(extractFromImage('aGVsbG8=', 'image/jpeg', mockEnv)).rejects.toBeInstanceOf(NoPlaceDetectedError)
+  })
+
+  it('does not retry on NoPlaceDetectedError (semantic, not transient)', async () => {
+    mockChatJsonWithImage.mockResolvedValue({ error: 'no_place_detected' })
+
+    await expect(extractFromImage('aGVsbG8=', 'image/jpeg', mockEnv)).rejects.toBeInstanceOf(NoPlaceDetectedError)
+    expect(mockChatJsonWithImage).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries once on API failure', async () => {
+    mockChatJsonWithImage
+      .mockRejectedValueOnce(new Error('API timeout'))
+      .mockResolvedValueOnce(RICH_RAW_RESPONSE)
+
+    const place = await extractFromImage('aGVsbG8=', 'image/jpeg', mockEnv)
+
+    expect(mockChatJsonWithImage).toHaveBeenCalledTimes(2)
+    expect(place.name).toBe('兒童新樂園')
   })
 })

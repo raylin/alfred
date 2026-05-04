@@ -7,14 +7,17 @@ import {
   type LineSource,
   getChatId,
   isTextMessage,
+  isImageMessage,
+  fetchMessageContent,
   startLoadingIndicator,
   sendReply,
+  sendPush,
   WELCOME_MESSAGE,
 } from './integrations/line'
 import { handleSlashCommand } from './core/slash-commands'
 import { routeIntent } from './core/intent-router'
 import { handleUnknown } from './core/unknown-handler'
-import { placesHandler } from './capabilities/places/handler'
+import { placesHandler, placesImageHandler } from './capabilities/places/handler'
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 
@@ -34,8 +37,39 @@ async function handleEvents(body: LineWebhookBody, env: Env): Promise<void> {
         continue
       }
 
+      if (event.type === 'postback') {
+        const data = event.postback.data
+        const chatId = getChatId(event.source)
+        if (data === 'dedup:update') {
+          await sendPush(chatId, [{ type: 'text', text: '好，你可以到 Notion 手動更新，或等阿福之後支援自動更新。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
+        } else if (data === 'dedup:skip') {
+          await sendPush(chatId, [{ type: 'text', text: '好，跳過，不重複存。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
+        }
+        continue
+      }
+
       if (event.type === 'message') {
         const message = event.message
+
+        // Image messages bypass LLM intent router — route directly to places (ADR-012)
+        if (isImageMessage(message)) {
+          const chatId = getChatId(event.source)
+          await startLoadingIndicator(chatId, env.LINE_CHANNEL_ACCESS_TOKEN)
+          try {
+            const imageData = await fetchMessageContent(message.id, env.LINE_CHANNEL_ACCESS_TOKEN)
+            await placesImageHandler(
+              { ...imageData, lineMessageId: message.id },
+              event.replyToken,
+              env,
+              event.source,
+            )
+          } catch (err) {
+            console.error('[webhook] image fetch/dispatch failed', err)
+            await sendReply(event.replyToken, [{ type: 'text', text: '圖片讀取失敗，請再傳一次。' }], env.LINE_CHANNEL_ACCESS_TOKEN)
+          }
+          continue
+        }
+
         if (!isTextMessage(message)) continue
 
         const chatId = getChatId(event.source)

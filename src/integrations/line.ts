@@ -8,11 +8,16 @@ export type LineSource =
   | { type: 'room'; roomId: string; userId: string }
 
 export type LineTextMessageContent = { type: 'text'; id: string; text: string }
+export type LineImageMessageContent = { type: 'image'; id: string }
 type LineOtherMessageContent = { type: string; id: string }
-type LineMessageContent = LineTextMessageContent | LineOtherMessageContent
+type LineMessageContent = LineTextMessageContent | LineImageMessageContent | LineOtherMessageContent
 
 export function isTextMessage(msg: LineMessageContent): msg is LineTextMessageContent {
   return msg.type === 'text'
+}
+
+export function isImageMessage(msg: LineMessageContent): msg is LineImageMessageContent {
+  return msg.type === 'image'
 }
 
 export type LineMessageEvent = {
@@ -40,7 +45,16 @@ export type LineJoinEvent = {
   mode: 'active' | 'standby'
 }
 
-export type LineEvent = LineMessageEvent | LineFollowEvent | LineJoinEvent
+export type LinePostbackEvent = {
+  type: 'postback'
+  replyToken: string
+  source: LineSource
+  timestamp: number
+  mode: 'active' | 'standby'
+  postback: { data: string }
+}
+
+export type LineEvent = LineMessageEvent | LineFollowEvent | LineJoinEvent | LinePostbackEvent
 
 export type LineWebhookBody = {
   destination: string
@@ -74,6 +88,30 @@ export const WELCOME_MESSAGE: LineTextMessage = {
 
 // --- API calls ---
 
+const LINE_CONTENT_API = 'https://api-data.line.me/v2/bot'
+
+export async function fetchMessageContent(
+  messageId: string,
+  accessToken: string,
+): Promise<{ contentBase64: string; mimeType: string; sizeBytes: number }> {
+  const res = await fetch(`${LINE_CONTENT_API}/message/${messageId}/content`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok) {
+    throw new Error(`LINE content API failed: ${res.status}`)
+  }
+  const mimeType = (res.headers.get('content-type') ?? 'image/jpeg').split(';')[0].trim()
+  const buffer = await res.arrayBuffer()
+  const sizeBytes = buffer.byteLength
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  const contentBase64 = btoa(binary)
+  return { contentBase64, mimeType, sizeBytes }
+}
+
 export async function startLoadingIndicator(chatId: string, accessToken: string): Promise<void> {
   const res = await fetch(`${LINE_API}/chat/loading/start`, {
     method: 'POST',
@@ -88,10 +126,30 @@ export async function startLoadingIndicator(chatId: string, accessToken: string)
   }
 }
 
+export async function sendPush(
+  chatId: string,
+  messages: LineMessage[],
+  accessToken: string,
+): Promise<void> {
+  const res = await fetch(`${LINE_API}/message/push`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ to: chatId, messages }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    console.error('[line] push failed', { chatId, status: res.status, body: text })
+  }
+}
+
 export async function sendReply(
   replyToken: string,
   messages: LineMessage[],
   accessToken: string,
+  chatId?: string,
 ): Promise<void> {
   const res = await fetch(`${LINE_API}/message/reply`, {
     method: 'POST',
@@ -103,6 +161,11 @@ export async function sendReply(
   })
   if (!res.ok) {
     const text = await res.text()
+    if (res.status === 400 && text.includes('Invalid reply token') && chatId !== undefined) {
+      console.warn('[line] reply token expired, falling back to push', { chatId })
+      await sendPush(chatId, messages, accessToken)
+      return
+    }
     console.error('[line] reply failed', { status: res.status, body: text })
   }
 }

@@ -3,8 +3,15 @@ import type { Env } from '../../core/env'
 const RAW_TTL_SECONDS = 90 * 24 * 60 * 60
 const LAST_PLACE_TTL_SECONDS = 24 * 60 * 60
 
+export type ImageRawInput = {
+  type: 'image'
+  line_message_id: string
+  mime_type: string
+  size_bytes: number
+}
+
 export type RawExtractionData = {
-  raw_input: string
+  raw_input: string | ImageRawInput
   raw_html?: string
   raw_google_places?: string
   raw_claude_response?: string

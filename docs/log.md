@@ -1,3 +1,11 @@
+## 2026-05-04 15:00 — Task 11 complete: Image Input (Claude Vision)
+
+fetchMessageContent in line.ts (binary → base64, LINE Content API at api-data.line.me). isImageMessage predicate. chatJsonWithImage in anthropic.ts. extractFromImage + NoPlaceDetectedError + IMAGE_SYSTEM_PROMPT in extract.ts. ImageRawInput in kv-store.ts (no base64 stored — ADR-013). flow-image.ts: size gate (5MB) → vision extract → Notion → KV → Flex or fallback text. placesImageHandler in handler.ts. index.ts: detects image messages before text routing, dispatches directly to placesImageHandler (skip intent router — ADR-012). _registry.ts: accepts_images: true on places. ADR-012 (image bypass router + accepts_images), ADR-013 (no base64 in KV). 221 tests pass (25 new). TypeScript clean. Awaiting user acceptance + deployment.
+
+## 2026-05-04 15:00 — Task 10 complete: Error handling, IG fallback, KV decoupling, dedup
+
+line.ts: sendPush added, sendReply extended with optional chatId → push fallback on 400/Invalid reply token (ADR-011). url-utils.ts: fetchWithTimeout accepts optional RequestInit for custom headers. duplicate-check.ts: KV fast path + Notion slow path, writeDedupKV. flow-b + flow-c: dedup check before extraction, writeDedupKV after Notion write, KV writes split into independent try/catch (ADR-010 for Story A/D limitation). flow-a: KV writes split. flow-d-instagram.ts (new): facebookexternalhit UA OG fetch → length gate → Claude extraction or fallback message (ADR-009). input-detect.ts: isInstagramUrl + 'instagram-url' InputType. handler.ts: instagram-url → runFlowD. index.ts: postback handling for dedup:update / dedup:skip (canned responses). flex-message.ts: buildDedupCard with postback buttons. ADR-009/010/011 recorded. 196 tests pass (28 new). TypeScript clean. Awaiting user acceptance + deployment.
+
 ## 2026-05-04 15:00 — Task 9 complete: Story E — Natural Language Search
 
 search-parser.ts (Claude Haiku intent → SearchFilters), flow-e-search.ts (parse → Notion query → in-memory scoring → carousel), buildSearchCarousel in flex-message.ts, handler.ts routes isSearchQuery to runFlowE. notion.ts: status filter changed to does_not_equal archived (includes draft + confirmed), sort changed to last_edited_time desc. ADR-008 recorded. 18 new tests (9 search-parser + 9 flow-e-search); 168 total. TypeScript clean. Awaiting user acceptance + deployment.

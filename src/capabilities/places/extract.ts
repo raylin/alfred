@@ -1,9 +1,9 @@
 import type { Env } from '../../core/env'
-import { createClient, chatJson, MODELS } from '../../integrations/anthropic'
+import { createClient, chatJson, chatJsonWithImage, MODELS } from '../../integrations/anthropic'
 import { generateUuid } from '../../lib/uuid'
 import type { Place } from './schema'
 
-// §7.2 system prompt — verbatim
+// §7.2 system prompt for text-based extraction
 const SYSTEM_PROMPT = `你是阿福，一個幫忙整理親子景點資訊的助手。輸入會是部落格文章原文、地點名稱，或 Google Maps 資訊。請輸出一個 JSON，符合以下 schema。
 
 Output schema (strict, no extra fields, no markdown wrappers):
@@ -119,6 +119,79 @@ function assemblePlace(
     source_url:         extra.source_url,
     created_by:         null,
   }
+}
+
+// Image extraction system prompt
+const IMAGE_SYSTEM_PROMPT = `你是阿福，一個幫忙整理親子景點資訊的助手。圖片可能是：IG 截圖 / FB 截圖 / LINE 對話截圖、實體店家招牌或環境照片、雜誌剪報、傳單、菜單、官網截圖。
+
+先判斷圖中是否有具體景點/店家資訊，有的話依下方 schema 抽取。
+若整張圖看不出明確景點（例如純風景照、人像、迷因），回 { "error": "no_place_detected" }。
+
+Output schema (strict, no extra fields, no markdown wrappers):
+
+{
+  "name": string,
+  "categories": string[],
+  "indoor_outdoor": "室內" | "半室內" | "室外" | null,
+  "address": string | null,
+  "region": "台北" | "新北" | "基隆" | "桃園" | "新竹" | "苗栗" | "台中" | "宜蘭" | "花蓮" | "其他" | null,
+  "age_min": number | null,
+  "age_max": number | null,
+  "seasons": ("春"|"夏"|"秋"|"冬"|"全年")[],
+  "stroller_friendly": boolean | null,
+  "parking_friendly": boolean | null,
+  "has_restroom": boolean | null,
+  "has_nursing_room": boolean | null,
+  "energy_level": "放電型" | "適中" | "安靜型" | null,
+  "stay_minutes": number | null,
+  "reservation_needed": boolean | null,
+  "crowded_on_weekends": boolean | null,
+  "fee_type": "免費" | "部分收費" | "全部收費" | null,
+  "fee_details": string | null,
+  "summary": string,
+  "ai_inferred_fields": string[]
+}
+
+規則：
+- 不確定的欄位用 null，不要硬猜。null 比錯的資訊好。
+- ai_inferred_fields 列出「有給值但信心不高」的欄位。圖片來源通常信心較低，ai_inferred_fields 比較多是正常的。
+- summary 不超過 80 字，重點是這地方對親子的特色，不是地址或營業時間。
+- 只回 JSON，不要前後加任何文字、不要用 markdown code fence。`
+
+type RawExtractedOrError = RawExtracted | { error: 'no_place_detected' }
+
+export class NoPlaceDetectedError extends Error {
+  constructor() {
+    super('no_place_detected')
+    this.name = 'NoPlaceDetectedError'
+  }
+}
+
+async function callImageWithRetry(imageBase64: string, mimeType: string, env: Env): Promise<RawExtracted> {
+  const client = createClient(env)
+
+  async function attempt(): Promise<RawExtracted> {
+    const result = await chatJsonWithImage<RawExtractedOrError>(client, MODELS.extraction, IMAGE_SYSTEM_PROMPT, imageBase64, mimeType)
+    if ('error' in result && result.error === 'no_place_detected') throw new NoPlaceDetectedError()
+    return result as RawExtracted
+  }
+
+  try {
+    return await attempt()
+  } catch (err) {
+    if (err instanceof NoPlaceDetectedError) throw err
+    return await attempt()
+  }
+}
+
+// §7.3 — Story Image: LINE image message
+export async function extractFromImage(
+  imageBase64: string,
+  mimeType: string,
+  env: Env,
+): Promise<Place> {
+  const raw = await callImageWithRetry(imageBase64, mimeType, env)
+  return assemblePlace(raw, { source_url: null, source_type: [] })
 }
 
 // §7.3 — Story A: blog/article URL
