@@ -1,3 +1,11 @@
+## 2026-05-04 17:40 — Task 5.5 complete: LLM Intent Router
+
+_registry.ts, intent-router.ts (Haiku, confidence 0.6 threshold), unknown-handler.ts, slash-commands.ts (/help + /place), index.ts wired. ADR-004 recorded. 21 new tests, 53 total. TypeScript clean. Awaiting user acceptance before commit.
+
+## 2026-05-04 17:15 — Task 5.5 started: LLM Intent Router spec amendment
+
+Handoff archived (2026-05-04-1323-intent-router-amendment.md). Task 4 committed and pushed. Building _registry.ts, intent-router.ts, unknown-handler.ts, slash-commands.ts, and wiring index.ts.
+
 ## 2026-05-04 16:55 — Task 4 complete: Claude Extraction Service
 
 anthropic.ts wrapper, extract.ts (extractFromHtml, extractFromGooglePlaces), and uuid.ts written. 14 unit tests pass (32 total). Also fixed a pre-existing exactOptionalPropertyTypes TS error in notion.ts. Model used: claude-sonnet-4-6 (spec says 4-7; not available — noted in report). Awaiting user acceptance before commit.

@@ -78,3 +78,31 @@ Remove the custom pool from `vitest.config.ts` and use `environment: 'node'` (vi
 - All current tests run cleanly under Node.js environment (pure unit tests, no Workers APIs).
 - Future tests that require Workers runtime (e.g., testing `crypto.subtle` or `KVNamespace`) will need the pool re-added — requires upgrading vitest to v4 at that point.
 - `@cloudflare/vitest-pool-workers` remains in `package.json` as a devDependency but is not used in config.
+
+---
+
+## ADR-004 — LLM-based intent router with 0.6 confidence threshold and parallel slash commands
+
+- **Date:** 2026-05-04
+- **Status:** accepted
+- **Task:** Task 5.5 (spec amendment, inserted before Task 6)
+
+### Context
+The original spec §3.2 designated `intent-router.ts` as "Phase 0+1: just routes to places". The PM amendment upgrades this to a proper LLM-based router so future capabilities can be added without code changes to the router. Three design questions needed answering: routing strategy, confidence threshold, and how to handle explicit user commands.
+
+### Decision
+1. **LLM-based routing (Claude Haiku):** Router sends message + capability registry to Haiku and gets back `{ capability, confidence }`. Registry-driven: adding a new capability only requires appending to `_registry.ts`, not modifying router code.
+2. **Confidence threshold = 0.6:** Below this, the unknown handler replies and asks for clarification. 0.6 was chosen as the midpoint between "clearly relevant" and "clearly not relevant" — high enough to avoid routing noise like casual greetings, low enough not to miss obvious place-related queries.
+3. **Slash commands alongside LLM router:** Deterministic commands (`/help`, `/place`) run at higher priority than the LLM router. Power users get a reliable override path; `/place` is a debugging fallback if the LLM misclassifies.
+
+### Alternatives considered
+- Keyword matching instead of LLM: brittle for Chinese (can't enumerate all phrasings), doesn't generalize to future capabilities, requires constant maintenance.
+- Higher threshold (0.8+): too conservative — a message like "帶孩子去哪好" has uncertain wording but clear intent.
+- Lower threshold (0.4): too permissive — off-topic messages like "謝謝" might get routed to places.
+- No slash commands: removes the deterministic override path; hard to debug misclassifications in production.
+
+### Consequences
+- Adding a future capability requires only: (1) append to `_registry.ts`, (2) add dispatch branch in `dispatchCapability` in `index.ts`.
+- Haiku API call on every text message adds ~200-500ms latency; acceptable given LINE loading indicator covers up to 60s.
+- Confidence threshold is a tunable constant (`CONFIDENCE_THRESHOLD` in `intent-router.ts`); can adjust based on production routing logs.
+- Observability: every routing decision logged as JSON (`type: intent_routing`) — useful for future accuracy analysis.
